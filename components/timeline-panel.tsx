@@ -1,0 +1,221 @@
+"use client";
+
+import { useCallback, useRef, useState } from "react";
+import { Scissors, Trash2, Undo, Redo, ZoomIn, ZoomOut, Type } from "lucide-react";
+import { useMonkeStore } from "@/lib/store";
+import type { useTimelinePlayer } from "@/lib/timeline-player";
+
+type DragKind = "start" | "end" | "reorder" | null;
+
+const BASE_PX_PER_SEC = 40;
+
+interface TimelinePanelProps {
+  player: ReturnType<typeof useTimelinePlayer>;
+}
+
+export function TimelinePanel({ player }: TimelinePanelProps) {
+  const timeline = useMonkeStore((s) => s.timeline);
+  const items = useMonkeStore((s) => s.items);
+  const updateTimelineClip = useMonkeStore((s) => s.updateTimelineClip);
+  const removeTimelineClip = useMonkeStore((s) => s.removeTimelineClip);
+  const reorderTimelineClip = useMonkeStore((s) => s.reorderTimelineClip);
+  const splitTimelineClip = useMonkeStore((s) => s.splitTimelineClip);
+  const addTimelineClip = useMonkeStore((s) => s.addTimelineClip);
+
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [dragging, setDragging] = useState<DragKind>(null);
+  const [zoom, setZoom] = useState(1);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const dragClipIdRef = useRef<string | null>(null);
+  const pxPerSec = BASE_PX_PER_SEC * zoom;
+
+  const onPointerDownClip = (clipId: string) => (e: React.PointerEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.dataset.handle) return;
+    e.stopPropagation();
+    setSelectedClipId(clipId);
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    dragClipIdRef.current = clipId;
+    setDragging("reorder");
+  };
+
+  const beginTrimDrag = (clipId: string, kind: "start" | "end") => (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    setSelectedClipId(clipId);
+    dragClipIdRef.current = clipId;
+    setDragging(kind);
+  };
+
+  const xToOrder = useCallback(
+    (clientX: number, draggedClipId: string): number => {
+      const rect = trackRef.current?.getBoundingClientRect();
+      if (!rect) return 0;
+      const sec = Math.max(0, (clientX - rect.left) / pxPerSec);
+      const others = timeline.clips.filter((c) => c.id !== draggedClipId).sort((a, b) => a.order - b.order);
+      if (others.length === 0) return 0;
+      let acc = 0;
+      for (let i = 0; i < others.length; i++) {
+        const dur = Math.max(0, others[i].trimOut - others[i].trimIn);
+        if (sec < acc + dur / 2) {
+          const prevOrder = i > 0 ? others[i - 1].order : others[i].order - 1;
+          return (prevOrder + others[i].order) / 2;
+        }
+        acc += dur;
+      }
+      return others[others.length - 1].order + 1;
+    },
+    [timeline, pxPerSec]
+  );
+
+  const onTrackPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!dragging || !dragClipIdRef.current) return;
+      const rect = trackRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const sec = Math.max(0, (e.clientX - rect.left) / pxPerSec);
+      const clip = timeline.clips.find((c) => c.id === dragClipIdRef.current);
+      if (!clip) return;
+      if (dragging === "start") {
+        updateTimelineClip(clip.id, { trimIn: Math.max(0, Math.min(sec, clip.trimOut - 0.1)) });
+      } else if (dragging === "end") {
+        const item = items.find((i) => i.id === clip.mediaId);
+        const cap = item?.durationSec ?? clip.trimOut + 999;
+        updateTimelineClip(clip.id, { trimOut: Math.min(cap, Math.max(sec, clip.trimIn + 0.1)) });
+      } else if (dragging === "reorder") {
+        reorderTimelineClip(clip.id, xToOrder(e.clientX, clip.id));
+      }
+    },
+    [dragging, timeline, items, updateTimelineClip, reorderTimelineClip, xToOrder, pxPerSec]
+  );
+
+  const onDropMedia = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const mediaId = e.dataTransfer.getData("application/monke-media-id");
+      if (mediaId) addTimelineClip(mediaId, {});
+    },
+    [addTimelineClip]
+  );
+
+  const endDrag = useCallback(() => {
+    setDragging(null);
+    dragClipIdRef.current = null;
+  }, []);
+
+  const clips = [...timeline.clips].sort((a, b) => a.order - b.order);
+
+  return (
+    <div className="flex h-full flex-col bg-[#0a0c10]">
+      <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5">
+        <button type="button" className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300">
+          <Undo className="h-3.5 w-3.5" />
+        </button>
+        <button type="button" className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300">
+          <Redo className="h-3.5 w-3.5" />
+        </button>
+        <div className="mx-1 h-4 w-px bg-white/10" />
+        <button
+          type="button"
+          onClick={() => {
+            if (!selectedClipId) return;
+            const clip = timeline.clips.find((c) => c.id === selectedClipId);
+            if (!clip) return;
+            const startOffset = player.clips.find((c) => c.id === selectedClipId)?.startOffset ?? 0;
+            const local = Math.max(0.05, player.currentTime - startOffset);
+            const dur = clip.trimOut - clip.trimIn;
+            const newId = splitTimelineClip(selectedClipId, Math.min(dur - 0.05, local));
+            if (newId) setSelectedClipId(newId);
+          }}
+          className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300"
+          title="Split at playhead"
+        >
+          <Scissors className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (!selectedClipId) return;
+            removeTimelineClip(selectedClipId);
+            setSelectedClipId(null);
+          }}
+          className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300"
+          title="Delete clip"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+        <button type="button" className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300" title="Add text">
+          <Type className="h-3.5 w-3.5" />
+        </button>
+        <div className="flex-1" />
+        <button type="button" onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))} className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300">
+          <ZoomOut className="h-3.5 w-3.5" />
+        </button>
+        <input type="range" min={0.25} max={3} step={0.25} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-24 accent-[#f26522]" />
+        <button type="button" onClick={() => setZoom((z) => Math.min(3, z + 0.25))} className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300">
+          <ZoomIn className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      <div className="flex items-center border-b border-white/10 px-2 py-1 text-[10px] font-semibold text-gray-400">Timeline 1</div>
+
+      <div
+        ref={trackRef}
+        onPointerMove={onTrackPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onDrop={onDropMedia}
+        onDragOver={(e) => e.preventDefault()}
+        className="relative flex-1 overflow-x-auto overflow-y-hidden px-2 py-2 select-none"
+        style={{ touchAction: "none" }}
+      >
+        <div className="relative h-16" style={{ width: Math.max(600, player.totalDuration * pxPerSec + 100) }}>
+          {clips.length === 0 && (
+            <div className="flex h-full items-center justify-center rounded-md border border-dashed border-white/10 text-[11px] text-gray-600">
+              Double-click a clip in the library, or drag it here
+            </div>
+          )}
+          {clips
+            .reduce<{ clip: (typeof clips)[number]; duration: number; startOffset: number }[]>((acc, clip) => {
+              const duration = Math.max(0, clip.trimOut - clip.trimIn);
+              const prevEnd = acc.length > 0 ? acc[acc.length - 1].startOffset + acc[acc.length - 1].duration : 0;
+              return [...acc, { clip, duration, startOffset: prevEnd }];
+            }, [])
+            .map(({ clip, duration, startOffset }) => {
+              const left = startOffset * pxPerSec;
+              const width = Math.max(24, duration * pxPerSec);
+              const item = items.find((i) => i.id === clip.mediaId);
+              const isSelected = selectedClipId === clip.id;
+              return (
+                <div
+                  key={clip.id}
+                  onPointerDown={onPointerDownClip(clip.id)}
+                  className={`absolute top-0 bottom-0 overflow-hidden rounded-md border-2 bg-[#1c2128] cursor-grab active:cursor-grabbing ${
+                    isSelected ? "border-[#f26522]" : "border-white/15 hover:border-white/30"
+                  }`}
+                  style={{ left, width }}
+                  title={item?.name}
+                >
+                  {item?.thumbnailUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={item.thumbnailUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-40" />
+                  )}
+                  <div className="relative truncate px-1.5 py-1 text-[9px] text-white/90">{item?.name || "clip"}</div>
+                  <div data-handle="start" onPointerDown={beginTrimDrag(clip.id, "start")} className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#f26522]/60 hover:bg-[#f26522]" />
+                  <div data-handle="end" onPointerDown={beginTrimDrag(clip.id, "end")} className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#f26522]/60 hover:bg-[#f26522]" />
+                </div>
+              );
+            })}
+
+          {clips.length > 0 && (
+            <div
+              className="pointer-events-none absolute top-0 bottom-0 w-[2px] bg-white shadow-[0_0_6px_rgba(255,255,255,0.6)]"
+              style={{ left: player.currentTime * pxPerSec }}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
