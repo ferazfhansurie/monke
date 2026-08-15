@@ -1,40 +1,177 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, Film, Captions, Mic, Music, FolderTree, Send, Plus, History } from "lucide-react";
+import { Sparkles, Film, Captions, Mic, Music, FolderTree, Send, Plus, History, Loader2 } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
+import type { ChatMessage, ChatMessagePart } from "@/lib/types";
 
 const STARTERS = [
-  { icon: Sparkles, label: "Generate an AI video" },
-  { icon: Film, label: "Generate B-roll" },
-  { icon: Captions, label: "Add captions to my timeline" },
+  { icon: Sparkles, label: "Analyse my clips" },
+  { icon: Film, label: "Cut these clips together in order" },
+  { icon: Captions, label: "Trim the start of the first clip" },
   { icon: Mic, label: "Create a voiceover" },
   { icon: Music, label: "Generate music and sync to my timeline" },
   { icon: FolderTree, label: "Organize my media into structured folders" },
 ];
 
-// The agent backend isn't wired yet (Phase 2 of the build) — this is the
-// real chat UI/UX, honest about its current state rather than faking a
-// response. Wiring it up is the next milestone: footage indexing (transcribe
-// + frame probe) and the same timeline tool-calling pattern proven on
-// MotionBoards, adapted to local File System Access media instead of
-// uploaded canvas items.
+const MAX_TURNS = 6;
+
+// Anthropic tool_use.input arrives as unknown JSON — narrow it per-tool
+// before use so a malformed call fails loudly instead of silently no-op-ing.
+function str(input: Record<string, unknown>, key: string): string | undefined {
+  const v = input[key];
+  return typeof v === "string" ? v : undefined;
+}
+function num(input: Record<string, unknown>, key: string): number | undefined {
+  const v = input[key];
+  return typeof v === "number" ? v : undefined;
+}
+
+// Converts the store's display-oriented ChatMessage[] into the Anthropic
+// Messages API shape. Kept as a pure function (not stored) so the two
+// representations can't drift — the store is the single source of truth.
+function toAnthropicMessages(messages: ChatMessage[]): Array<{ role: "user" | "assistant"; content: unknown }> {
+  return messages.map((m) => ({
+    role: m.role,
+    content: m.parts.map((p) => {
+      if (p.type === "text") return { type: "text", text: p.text ?? "" };
+      if (p.type === "tool_use") return { type: "tool_use", id: p.toolUseId, name: p.name, input: p.input ?? {} };
+      return { type: "tool_result", tool_use_id: p.toolUseId, content: p.content ?? "", is_error: p.isError || undefined };
+    }),
+  }));
+}
+
+function buildTimelineContext(): string {
+  const { items, timeline } = useMonkeStore.getState();
+  const libraryLines =
+    items.length === 0
+      ? "Empty — nothing imported yet."
+      : items.map((i) => `- ${i.id}: "${i.name}" (${i.kind}${i.durationSec ? `, ${i.durationSec.toFixed(1)}s` : ""})`).join("\n");
+  const sortedClips = [...timeline.clips].sort((a, b) => a.order - b.order);
+  const timelineLines =
+    sortedClips.length === 0
+      ? "Empty."
+      : sortedClips
+          .map((c) => {
+            const item = items.find((i) => i.id === c.mediaId);
+            return `- clip ${c.id} (order ${c.order}): media ${c.mediaId} "${item?.name ?? "?"}", trim ${c.trimIn.toFixed(1)}s-${c.trimOut.toFixed(1)}s`;
+          })
+          .join("\n");
+  return `## CURRENT LIBRARY\n${libraryLines}\n\n## CURRENT TIMELINE\n${timelineLines}`;
+}
+
+interface ToolResult {
+  ok: boolean;
+  message: string;
+}
+
+function dispatchTool(name: string, input: Record<string, unknown>): ToolResult {
+  const store = useMonkeStore.getState();
+  try {
+    if (name === "timeline_add_clip") {
+      const mediaId = str(input, "media_id");
+      if (!mediaId) return { ok: false, message: "media_id is required" };
+      const item = store.items.find((i) => i.id === mediaId);
+      if (!item) return { ok: false, message: `No library item with id "${mediaId}".` };
+      const trimIn = num(input, "trim_in");
+      const trimOut = num(input, "trim_out");
+      const order = num(input, "order");
+      const clipId = store.addTimelineClip(mediaId, { trimIn, trimOut, order });
+      return { ok: true, message: `Added clip ${clipId} ("${item.name}") to the timeline.` };
+    }
+    if (name === "timeline_trim_clip") {
+      const clipId = str(input, "clip_id");
+      const clip = clipId ? store.timeline.clips.find((c) => c.id === clipId) : undefined;
+      if (!clip) return { ok: false, message: `No timeline clip with id "${clipId}".` };
+      const trimIn = num(input, "trim_in") ?? clip.trimIn;
+      const trimOut = num(input, "trim_out") ?? clip.trimOut;
+      if (trimIn >= trimOut) return { ok: false, message: "trim_in must be less than trim_out." };
+      store.updateTimelineClip(clip.id, { trimIn, trimOut });
+      return { ok: true, message: `Clip ${clip.id} trimmed to ${trimIn.toFixed(1)}s-${trimOut.toFixed(1)}s.` };
+    }
+    if (name === "timeline_reorder_clip") {
+      const clipId = str(input, "clip_id");
+      const order = num(input, "order");
+      const clip = clipId ? store.timeline.clips.find((c) => c.id === clipId) : undefined;
+      if (!clip || order == null) return { ok: false, message: `No timeline clip with id "${clipId}".` };
+      store.reorderTimelineClip(clip.id, order);
+      return { ok: true, message: `Clip ${clip.id} moved to position ${order}.` };
+    }
+    if (name === "timeline_split_clip") {
+      const clipId = str(input, "clip_id");
+      const atSeconds = num(input, "at_seconds");
+      const clip = clipId ? store.timeline.clips.find((c) => c.id === clipId) : undefined;
+      if (!clip || atSeconds == null) return { ok: false, message: `No timeline clip with id "${clipId}".` };
+      const newId = store.splitTimelineClip(clip.id, atSeconds);
+      if (!newId) return { ok: false, message: "Split point must be strictly inside the clip's own range." };
+      return { ok: true, message: `Split clip ${clip.id} into ${clip.id} and ${newId}.` };
+    }
+    if (name === "timeline_remove_clip") {
+      const clipId = str(input, "clip_id");
+      if (!clipId || !store.timeline.clips.some((c) => c.id === clipId)) {
+        return { ok: true, message: `Clip "${clipId}" is already not on the timeline.` };
+      }
+      store.removeTimelineClip(clipId);
+      return { ok: true, message: `Removed clip ${clipId}.` };
+    }
+    return { ok: false, message: `Unknown tool: ${name}` };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Tool execution failed" };
+  }
+}
+
 export function ChatPanel() {
   const messages = useMonkeStore((s) => s.messages);
-  const sendMessage = useMonkeStore((s) => s.sendMessage);
+  const pushMessage = useMonkeStore((s) => s.pushMessage);
   const items = useMonkeStore((s) => s.items);
   const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const send = (text: string) => {
-    if (!text.trim()) return;
-    sendMessage("user", text);
+  const send = async (text: string) => {
+    if (!text.trim() || loading) return;
     setInput("");
-    setTimeout(() => {
-      sendMessage(
-        "assistant",
-        "The editing agent isn't connected yet — this is the interface only. Once wired up, I'll be able to see and cut your footage directly."
-      );
-    }, 400);
+    let history = [...messages, { id: "", role: "user" as const, parts: [{ type: "text" as const, text }], createdAt: "" }];
+    pushMessage("user", [{ type: "text", text }]);
+    setLoading(true);
+
+    try {
+      for (let turn = 0; turn < MAX_TURNS; turn++) {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: toAnthropicMessages(history), timelineContext: buildTimelineContext() }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          pushMessage("assistant", [{ type: "text", text: `Error: ${data.error || "Request failed"}` }]);
+          break;
+        }
+
+        const content = data.content as Array<{ type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }>;
+        const assistantParts: ChatMessagePart[] = content.map((block) => {
+          if (block.type === "text") return { type: "text", text: block.text };
+          return { type: "tool_use", name: block.name, input: block.input, toolUseId: block.id };
+        });
+        const assistantMsg = pushMessage("assistant", assistantParts);
+        history = [...history, assistantMsg];
+
+        if (data.stop_reason !== "tool_use") break;
+
+        const toolUses = content.filter((b) => b.type === "tool_use");
+        if (toolUses.length === 0) break;
+
+        const resultParts: ChatMessagePart[] = toolUses.map((tu) => {
+          const result = dispatchTool(tu.name!, tu.input || {});
+          return { type: "tool_result", toolUseId: tu.id, content: result.message, isError: !result.ok };
+        });
+        const resultMsg = pushMessage("user", resultParts);
+        history = [...history, resultMsg];
+      }
+    } catch (err) {
+      pushMessage("assistant", [{ type: "text", text: `Error: ${err instanceof Error ? err.message : "Something went wrong"}` }]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -67,23 +204,45 @@ export function ChatPanel() {
                 </button>
               ))}
             </div>
-            {items.length === 0 && (
-              <p className="mt-2 text-[10px] text-gray-600">Open a folder first so I have footage to work with.</p>
-            )}
+            {items.length === 0 && <p className="mt-2 text-[10px] text-gray-600">Open a folder first so I have footage to work with.</p>}
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {messages.map((m) => (
-              <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div
-                  className={`max-w-[85%] rounded-xl px-3 py-2 text-[12px] leading-relaxed ${
-                    m.role === "user" ? "bg-[#f26522] text-white" : "border border-white/10 bg-white/[0.03] text-gray-300"
-                  }`}
-                >
-                  {m.parts.map((p, i) => (p.type === "text" ? <span key={i}>{p.text}</span> : null))}
+            {messages.map((m) => {
+              const textParts = m.parts.filter((p) => p.type === "text" && p.text);
+              const toolParts = m.parts.filter((p) => p.type === "tool_use" || p.type === "tool_result");
+              if (textParts.length === 0 && toolParts.length === 0) return null;
+              return (
+                <div key={m.id} className={`flex flex-col gap-1.5 ${m.role === "user" ? "items-end" : "items-start"}`}>
+                  {textParts.map((p, i) => (
+                    <div
+                      key={i}
+                      className={`max-w-[85%] rounded-xl px-3 py-2 text-[12px] leading-relaxed ${
+                        m.role === "user" ? "bg-[#f26522] text-white" : "border border-white/10 bg-white/[0.03] text-gray-300"
+                      }`}
+                    >
+                      {p.text}
+                    </div>
+                  ))}
+                  {toolParts.map((p, i) => (
+                    <div key={i} className="max-w-[85%] rounded-lg border border-white/10 bg-black/30 px-2.5 py-1.5 text-[10px] text-gray-500">
+                      {p.type === "tool_use" ? (
+                        <span>
+                          <span className="font-mono text-[#f26522]/80">{p.name}</span>
+                        </span>
+                      ) : (
+                        <span className={p.isError ? "text-red-400/80" : ""}>{p.content}</span>
+                      )}
+                    </div>
+                  ))}
                 </div>
+              );
+            })}
+            {loading && (
+              <div className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                <Loader2 className="h-3 w-3 animate-spin" /> Thinking…
               </div>
-            ))}
+            )}
           </div>
         )}
       </div>
@@ -101,18 +260,19 @@ export function ChatPanel() {
             }}
             rows={1}
             placeholder="Ask, or type @ to reference media"
-            className="max-h-24 w-full resize-none bg-transparent text-[12px] text-gray-200 placeholder:text-gray-600 outline-none"
+            disabled={loading}
+            className="max-h-24 w-full resize-none bg-transparent text-[12px] text-gray-200 placeholder:text-gray-600 outline-none disabled:opacity-50"
           />
           <button
             type="button"
             onClick={() => send(input)}
-            disabled={!input.trim()}
+            disabled={!input.trim() || loading}
             className="shrink-0 rounded-md bg-[#f26522] p-1.5 text-white disabled:opacity-30 hover:bg-[#d9541a] transition-colors"
           >
-            <Send className="h-3 w-3" />
+            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
           </button>
         </div>
-        <div className="mt-1.5 px-0.5 text-[10px] text-gray-600">Opus 4.8 · not connected</div>
+        <div className="mt-1.5 px-0.5 text-[10px] text-gray-600">Opus 4.8</div>
       </div>
     </div>
   );

@@ -58,3 +58,9 @@ export interface ChatMessage {
   parts: ChatMessagePart[];
   createdAt: string;
 }
+
+export interface AuthUser {
+  id: string;
+  name: string;
+  email: string;
+}

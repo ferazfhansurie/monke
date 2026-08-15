@@ -1,9 +1,12 @@
 "use client";
 
 import { create } from "zustand";
-import type { MediaItem, Timeline, TimelineClip, ProjectSettings, ChatMessage } from "./types";
+import type { MediaItem, Timeline, TimelineClip, ProjectSettings, ChatMessage, AuthUser } from "./types";
 
 interface MonkeState {
+  // Auth
+  user: AuthUser | null;
+
   // Project / folder
   projectName: string;
   folderHandle: FileSystemDirectoryHandle | null;
@@ -29,6 +32,7 @@ interface MonkeState {
   theme: "light" | "dark";
 
   // Actions
+  setUser: (user: AuthUser | null) => void;
   setFolder: (handle: FileSystemDirectoryHandle, name: string) => void;
   setLoadingFolder: (v: boolean) => void;
   setLoadProgress: (p: { done: number; total: number } | null) => void;
@@ -46,7 +50,7 @@ interface MonkeState {
   // IDs constructed inside a component body during render are flagged as
   // impure by the React Compiler; store actions run outside render, so
   // it's the right place for this.
-  sendMessage: (role: ChatMessage["role"], text: string) => void;
+  pushMessage: (role: ChatMessage["role"], parts: ChatMessage["parts"]) => ChatMessage;
   setTheme: (t: "light" | "dark") => void;
   reset: () => void;
 }
@@ -59,6 +63,7 @@ const defaultSettings: ProjectSettings = {
 };
 
 export const useMonkeStore = create<MonkeState>((set, get) => ({
+  user: null,
   projectName: "Untitled Project",
   folderHandle: null,
   isLoadingFolder: false,
@@ -72,6 +77,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   messages: [],
   theme: "dark",
 
+  setUser: (user) => set({ user }),
   setFolder: (handle, name) => set({ folderHandle: handle, projectName: name }),
   setLoadingFolder: (v) => set({ isLoadingFolder: v }),
   setLoadProgress: (p) => set({ loadProgress: p }),
@@ -131,18 +137,16 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   setPlayhead: (sec) => set({ playheadSec: sec }),
   setIsPlaying: (v) => set({ isPlaying: v }),
   setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
-  sendMessage: (role, text) =>
-    set((s) => ({
-      messages: [
-        ...s.messages,
-        {
-          id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          role,
-          parts: [{ type: "text", text }],
-          createdAt: new Date().toISOString(),
-        },
-      ],
-    })),
+  pushMessage: (role, parts) => {
+    const msg: ChatMessage = {
+      id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      role,
+      parts,
+      createdAt: new Date().toISOString(),
+    };
+    set((s) => ({ messages: [...s.messages, msg] }));
+    return msg;
+  },
   setTheme: (t) => set({ theme: t }),
   reset: () =>
     set({
