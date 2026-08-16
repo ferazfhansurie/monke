@@ -175,6 +175,27 @@ export function InspectorPanel() {
             <PctInput value={selectedClip.opacity ?? 1} onChange={(v) => updateTimelineClip(selectedClip.id, { opacity: v })} />
           </Field>
 
+          <div className="py-1 text-[10px] font-medium text-gray-600">Audio</div>
+          <Field label="Volume">
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round((selectedClip.volume ?? 1) * 100)}
+              onChange={(e) => updateTimelineClip(selectedClip.id, { volume: Number(e.target.value) / 100 })}
+              disabled={selectedClip.muted ?? false}
+              className="w-20 accent-[#f26522] disabled:opacity-30"
+            />
+          </Field>
+          <Field label="Mute">
+            <input
+              type="checkbox"
+              checked={selectedClip.muted ?? (selectedClip.trackIndex ?? 0) > 0}
+              onChange={(e) => updateTimelineClip(selectedClip.id, { muted: e.target.checked })}
+              className="accent-[#f26522]"
+            />
+          </Field>
+
           <div className="py-1 text-[10px] font-medium text-gray-600">Mask</div>
           <Field label="Shape">
             <select

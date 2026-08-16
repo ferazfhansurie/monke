@@ -57,6 +57,8 @@ export interface TimelineClip {
   position?: ClipRect; // defaults to full-frame {x:0,y:0,width:1,height:1} when unset
   opacity?: number; // 0-1, defaults to 1
   mask?: ClipMask;
+  volume?: number; // 0-1, defaults to 1. Overlay clips (trackIndex > 0) default to muted instead — see `muted`.
+  muted?: boolean; // defaults to false for base-track clips, true for overlay clips (avoids surprise second audio track under the base clip's own sound)
 }
 
 // A caption is text, not media — it has no mediaId, sits on its own
@@ -109,6 +111,14 @@ export interface ChatMessage {
   role: "user" | "assistant";
   parts: ChatMessagePart[];
   createdAt: string;
+}
+
+// A past conversation, archived when "New chat" is clicked with a non-empty
+// conversation — reopenable via the History button instead of being lost.
+export interface ChatSession {
+  id: string;
+  messages: ChatMessage[];
+  endedAt: string;
 }
 
 export interface AuthUser {

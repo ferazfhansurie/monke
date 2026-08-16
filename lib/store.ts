@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import type { MediaItem, Timeline, TimelineClip, Caption, ProjectSettings, ChatMessage, AuthUser } from "./types";
+import type { MediaItem, Timeline, TimelineClip, Caption, ProjectSettings, ChatMessage, ChatSession, AuthUser } from "./types";
 import { DEFAULT_CHAT_MODEL } from "./models";
 import { listMediaHandles, buildMediaItem, kindForName } from "./fs";
 import { DEFAULT_PIP_RECT } from "./layer-style";
@@ -31,6 +31,7 @@ export interface Project {
   timeline: Timeline;
   settings: ProjectSettings;
   messages: ChatMessage[];
+  chatHistory: ChatSession[];
   chatModel: string;
 }
 
@@ -52,6 +53,7 @@ function newProject(name: string): Project {
     timeline: { id: `tl_${Date.now()}`, name: "Timeline 1", clips: [], captions: [] },
     settings: defaultSettings,
     messages: [],
+    chatHistory: [],
     chatModel: DEFAULT_CHAT_MODEL,
   };
 }
@@ -108,6 +110,7 @@ interface MonkeState {
   isPlaying: boolean;
   settings: ProjectSettings;
   messages: ChatMessage[];
+  chatHistory: ChatSession[];
   chatModel: string;
 
   // Timeline undo/redo — per active project, covers clips AND captions together
@@ -150,11 +153,13 @@ interface MonkeState {
       position?: TimelineClip["position"];
       opacity?: number;
       mask?: TimelineClip["mask"];
+      volume?: number;
+      muted?: boolean;
     }
   ) => string;
   updateTimelineClip: (
     clipId: string,
-    patch: Partial<Pick<TimelineClip, "trimIn" | "trimOut" | "order" | "trackIndex" | "timelineStart" | "position" | "opacity" | "mask">>
+    patch: Partial<Pick<TimelineClip, "trimIn" | "trimOut" | "order" | "trackIndex" | "timelineStart" | "position" | "opacity" | "mask" | "volume" | "muted">>
   ) => void;
   removeTimelineClip: (clipId: string) => void;
   reorderTimelineClip: (clipId: string, order: number) => void;
@@ -177,6 +182,7 @@ interface MonkeState {
   // it's the right place for this.
   pushMessage: (role: ChatMessage["role"], parts: ChatMessage["parts"]) => ChatMessage;
   clearChat: () => void;
+  restoreChatSession: (id: string) => void;
   setChatModel: (id: string) => void;
   renameProject: (id: string, name: string) => void;
   createProject: () => void;
@@ -202,6 +208,7 @@ function syncActiveProjectIntoList(s: MonkeState): Project[] {
           timeline: s.timeline,
           settings: s.settings,
           messages: s.messages,
+          chatHistory: s.chatHistory,
           chatModel: s.chatModel,
         }
       : p
@@ -226,6 +233,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   isPlaying: false,
   settings: defaultSettings,
   messages: [],
+  chatHistory: [],
   chatModel: DEFAULT_CHAT_MODEL,
   timelineUndoStack: [],
   timelineRedoStack: [],
@@ -274,7 +282,16 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       if (trackIndex === 0) {
         // Base track: sequential, ordered — same behavior as before layering existed.
         const maxOrder = clips.filter((c) => (c.trackIndex ?? 0) === 0).reduce((m, c) => Math.max(m, c.order), -1);
-        newClip = { id: clipId, mediaId, trimIn, trimOut, order: opts?.order ?? maxOrder + 1, trackIndex: 0 };
+        newClip = {
+          id: clipId,
+          mediaId,
+          trimIn,
+          trimOut,
+          order: opts?.order ?? maxOrder + 1,
+          trackIndex: 0,
+          volume: opts?.volume,
+          muted: opts?.muted,
+        };
       } else {
         // Overlay track: floats at an explicit timeline position, independent of base-track sequencing.
         newClip = {
@@ -288,6 +305,12 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
           position: opts?.position ?? DEFAULT_PIP_RECT,
           opacity: opts?.opacity,
           mask: opts?.mask,
+          // Overlays default to muted — surfacing a second audio track
+          // under the base clip's own sound is rarely what's wanted;
+          // explicit muted:false (via update_caption/update_timeline_clip's
+          // muted field) opts back in.
+          volume: opts?.volume,
+          muted: opts?.muted ?? true,
         };
       }
       return {
@@ -493,7 +516,38 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
     set((s) => ({ messages: [...s.messages, msg] }));
     return msg;
   },
-  clearChat: () => set({ messages: [] }),
+  // Archives the current conversation (if non-empty) before wiping it, so
+  // "New chat" isn't destructive — History can reopen it. Frame images are
+  // stripped for the archive, same as the debounced auto-save does for the
+  // live conversation (large, re-derivable, not worth keeping around).
+  clearChat: () =>
+    set((s) => {
+      if (s.messages.length === 0) return { messages: [] };
+      const archived: ChatSession = {
+        id: `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        messages: s.messages.map((m) => ({ ...m, parts: m.parts.map((part) => ({ ...part, imageDataUrls: undefined })) })),
+        endedAt: new Date().toISOString(),
+      };
+      return { messages: [], chatHistory: [archived, ...s.chatHistory].slice(0, 30) };
+    }),
+  restoreChatSession: (id) =>
+    set((s) => {
+      const session = s.chatHistory.find((h) => h.id === id);
+      if (!session) return s;
+      const rest = s.chatHistory.filter((h) => h.id !== id);
+      const withCurrentArchived =
+        s.messages.length > 0
+          ? [
+              {
+                id: `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                messages: s.messages,
+                endedAt: new Date().toISOString(),
+              },
+              ...rest,
+            ]
+          : rest;
+      return { messages: session.messages, chatHistory: withCurrentArchived.slice(0, 30) };
+    }),
   setChatModel: (id) => set({ chatModel: id }),
 
   renameProject: (id, name) =>
@@ -519,6 +573,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         timeline: fresh.timeline,
         settings: fresh.settings,
         messages: fresh.messages,
+        chatHistory: fresh.chatHistory,
         chatModel: fresh.chatModel,
         playheadSec: 0,
         isPlaying: false,
@@ -548,6 +603,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         timeline: target.timeline,
         settings: target.settings,
         messages: target.messages,
+        chatHistory: target.chatHistory,
         chatModel: target.chatModel,
         playheadSec: 0,
         isPlaying: false,
@@ -591,6 +647,10 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
 // without re-uploading anything. Frame images captured by
 // timeline_probe_clip are stripped before saving (large, and re-derivable
 // on demand) — only the surrounding text/tool-call record is kept.
+function stripImages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((m) => ({ ...m, parts: m.parts.map((part) => ({ ...part, imageDataUrls: undefined })) }));
+}
+
 async function persistNow(state: MonkeState): Promise<void> {
   const list = syncActiveProjectIntoList(state);
   for (const p of list) {
@@ -602,7 +662,8 @@ async function persistNow(state: MonkeState): Promise<void> {
       looseFileHandles: p.looseFileHandles,
       timeline: p.timeline,
       settings: p.settings,
-      messages: p.messages.map((m) => ({ ...m, parts: m.parts.map((part) => ({ ...part, imageDataUrls: undefined })) })),
+      messages: stripImages(p.messages),
+      chatHistory: p.chatHistory.map((h) => ({ ...h, messages: stripImages(h.messages) })),
       chatModel: p.chatModel,
     };
     try {
@@ -644,6 +705,7 @@ function relevantFieldsChanged(state: MonkeState, prev: MonkeState): boolean {
     state.timeline !== prev.timeline ||
     state.settings !== prev.settings ||
     state.messages !== prev.messages ||
+    state.chatHistory !== prev.chatHistory ||
     state.chatModel !== prev.chatModel
   );
 }
@@ -696,6 +758,7 @@ export async function hydrateMonkeStore(): Promise<void> {
       timeline: { ...p.timeline, captions: p.timeline.captions ?? [] },
       settings: p.settings,
       messages: p.messages,
+      chatHistory: p.chatHistory ?? [],
       chatModel: p.chatModel,
     }));
     const savedActiveId = getPersistedActiveProjectId();
@@ -710,6 +773,7 @@ export async function hydrateMonkeStore(): Promise<void> {
       timeline: active.timeline,
       settings: active.settings,
       messages: active.messages,
+      chatHistory: active.chatHistory,
       chatModel: active.chatModel,
       hydrated: true,
     });

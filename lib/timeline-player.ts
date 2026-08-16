@@ -17,6 +17,8 @@ interface ResolvedClip {
   position?: ClipRect;
   opacity?: number;
   mask?: ClipMask;
+  volume?: number;
+  muted?: boolean;
 }
 
 // Only the base track (trackIndex 0, or unset for clips created before
@@ -43,6 +45,8 @@ function resolveClips(timeline: Timeline, srcForMedia: (mediaId: string) => stri
       position: c.position,
       opacity: c.opacity,
       mask: c.mask,
+      volume: c.volume,
+      muted: c.muted,
     });
     offset += duration;
   }
@@ -91,6 +95,19 @@ export function useTimelinePlayer(videoElA: RefObject<HTMLVideoElement | null>, 
   const activeSlotRef = useRef<0 | 1>(0);
   const slotClipIndexRef = useRef<[number, number]>([-1, -1]);
   const activeClipIndexRef = useRef(0);
+  // Mirrors `isPlaying` for use inside applyGlobalTime (a useCallback that
+  // can't safely close over the React state value across renders the way
+  // it needs to when called from the rAF loop) — set alongside every
+  // setIsPlaying call, never on its own.
+  const isPlayingRef = useRef(false);
+
+  const applyVolume = useCallback(
+    (el: HTMLVideoElement, clip: ResolvedClip | undefined) => {
+      el.volume = clip?.volume ?? 1;
+      el.muted = clip?.muted ?? false;
+    },
+    []
+  );
 
   const loadIntoSlot = useCallback(
     (slot: 0 | 1, clipIndex: number) => {
@@ -98,9 +115,10 @@ export function useTimelinePlayer(videoElA: RefObject<HTMLVideoElement | null>, 
       const el = getVideoEl(slot);
       if (!clip || !el) return;
       if (el.src !== clip.src) el.src = clip.src;
+      applyVolume(el, clip);
       slotClipIndexRef.current = slot === 0 ? [clipIndex, slotClipIndexRef.current[1]] : [slotClipIndexRef.current[0], clipIndex];
     },
-    [clips, getVideoEl]
+    [clips, getVideoEl, applyVolume]
   );
 
   // This effect both synchronizes an external system (video element refs —
@@ -113,6 +131,7 @@ export function useTimelinePlayer(videoElA: RefObject<HTMLVideoElement | null>, 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setIsPlaying(false);
+    isPlayingRef.current = false;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     currentTimeRef.current = 0;
     setCurrentTime(0);
@@ -128,7 +147,7 @@ export function useTimelinePlayer(videoElA: RefObject<HTMLVideoElement | null>, 
       if (clips.length > 1) loadIntoSlot(1, 1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clips.map((c) => `${c.id}:${c.src}:${c.trimIn}:${c.trimOut}`).join("|")]);
+  }, [clips.map((c) => `${c.id}:${c.src}:${c.trimIn}:${c.trimOut}:${c.volume}:${c.muted}`).join("|")]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const applyGlobalTime = useCallback(
@@ -139,15 +158,32 @@ export function useTimelinePlayer(videoElA: RefObject<HTMLVideoElement | null>, 
       const activeSlotEl = getVideoEl(activeSlotRef.current);
 
       if (index !== activeClipIndexRef.current) {
+        const outgoingEl = activeSlotEl;
         const inactiveSlot: 0 | 1 = activeSlotRef.current === 0 ? 1 : 0;
+        let newActiveEl: HTMLVideoElement | null;
         if (slotClipIndexRef.current[inactiveSlot] === index) {
-          const inactiveEl = getVideoEl(inactiveSlot);
-          if (inactiveEl) inactiveEl.currentTime = localTime;
+          newActiveEl = getVideoEl(inactiveSlot);
+          if (newActiveEl) newActiveEl.currentTime = localTime;
           activeSlotRef.current = inactiveSlot;
           setActiveSlot(inactiveSlot);
         } else {
           loadIntoSlot(activeSlotRef.current, index);
-          if (activeSlotEl) activeSlotEl.currentTime = localTime;
+          newActiveEl = activeSlotEl;
+          if (newActiveEl) newActiveEl.currentTime = localTime;
+        }
+        // The previous engine only ever called .play() once, when Play was
+        // first pressed — crossing a clip boundary mid-playback swapped
+        // which element was "active" (opacity/z-order) but never told the
+        // newly-active element to actually play, and never paused the one
+        // it replaced. In practice that meant clip 2+ played silently and
+        // janked (a paused element repeatedly hard-seeked every ~150ms by
+        // the drift correction below) while the outgoing clip kept
+        // producing audio in the background. Explicit pause/play here is
+        // the fix, not new behavior.
+        if (outgoingEl && outgoingEl !== newActiveEl) outgoingEl.pause();
+        if (newActiveEl) {
+          applyVolume(newActiveEl, clips[index]);
+          if (isPlayingRef.current) newActiveEl.play().catch(() => {});
         }
         activeClipIndexRef.current = index;
         setActiveClipIndex(index);
@@ -162,8 +198,18 @@ export function useTimelinePlayer(videoElA: RefObject<HTMLVideoElement | null>, 
       currentTimeRef.current = t;
       setCurrentTime(t);
     },
-    [clips, loadIntoSlot, getVideoEl]
+    [clips, loadIntoSlot, getVideoEl, applyVolume]
   );
+
+  // Keeps the active element's volume/mute in sync when the CURRENT clip's
+  // own volume/muted fields change (e.g. dragging the Inspector's volume
+  // slider) without a slot switch — applyGlobalTime only re-applies volume
+  // at the moment a switch happens, not on every tick.
+  useEffect(() => {
+    const el = getVideoEl(activeSlot);
+    const clip = clips[activeClipIndex];
+    if (el && clip) applyVolume(el, clip);
+  }, [clips, activeClipIndex, activeSlot, getVideoEl, applyVolume]);
 
   // Recursive rAF callbacks need to call themselves, but referencing a
   // `const tick = useCallback(...)` binding from inside its own initializer
@@ -183,6 +229,7 @@ export function useTimelinePlayer(videoElA: RefObject<HTMLVideoElement | null>, 
         next = totalDuration;
         applyGlobalTime(next);
         setIsPlaying(false);
+        isPlayingRef.current = false;
         return;
       }
       applyGlobalTime(next);
@@ -202,6 +249,7 @@ export function useTimelinePlayer(videoElA: RefObject<HTMLVideoElement | null>, 
       applyGlobalTime(0, { seeking: true });
     }
     setIsPlaying(true);
+    isPlayingRef.current = true;
     lastTickRef.current = null;
     getVideoEl(activeSlotRef.current)?.play().catch(() => {});
     rafRef.current = requestAnimationFrame(tick);
@@ -209,6 +257,7 @@ export function useTimelinePlayer(videoElA: RefObject<HTMLVideoElement | null>, 
 
   const pause = useCallback(() => {
     setIsPlaying(false);
+    isPlayingRef.current = false;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     getVideoEl(activeSlotRef.current)?.pause();
   }, [getVideoEl]);

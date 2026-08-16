@@ -9,6 +9,25 @@ import type { useTimelinePlayer } from "@/lib/timeline-player";
 type DragKind = "start" | "end" | "reorder" | null;
 
 const BASE_PX_PER_SEC = 40;
+const SNAP_THRESHOLD_PX = 8;
+
+// Snaps a candidate timeline-space position (seconds) to the nearest of a
+// set of target positions if it's within SNAP_THRESHOLD_PX on screen —
+// otherwise returns the candidate unchanged. Threshold is in pixels (not
+// seconds) so it feels the same regardless of zoom level.
+function snapToNearby(sec: number, targets: number[], pxPerSec: number): number {
+  const thresholdSec = SNAP_THRESHOLD_PX / pxPerSec;
+  let best = sec;
+  let bestDist = thresholdSec;
+  for (const t of targets) {
+    const dist = Math.abs(sec - t);
+    if (dist < bestDist) {
+      best = t;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
 
 interface TimelinePanelProps {
   player: ReturnType<typeof useTimelinePlayer>;
@@ -91,17 +110,41 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
       const sec = Math.max(0, (e.clientX - rect.left) / pxPerSec);
       const clip = timeline.clips.find((c) => c.id === dragClipIdRef.current);
       if (!clip) return;
-      if (dragging === "start") {
-        updateTimelineClip(clip.id, { trimIn: Math.max(0, Math.min(sec, clip.trimOut - 0.1)) });
-      } else if (dragging === "end") {
-        const item = items.find((i) => i.id === clip.mediaId);
-        const cap = item?.durationSec ?? clip.trimOut + 999;
-        updateTimelineClip(clip.id, { trimOut: Math.min(cap, Math.max(sec, clip.trimIn + 0.1)) });
+
+      if (dragging === "start" || dragging === "end") {
+        // Trim handles are dragged in TIMELINE space (screen position), but
+        // trimIn/trimOut are offsets into the SOURCE media — only equal to
+        // the raw cursor position for a clip sitting at timeline position 0.
+        // For any later clip this must go through the clip's own
+        // startOffset (sum of every base-track clip before it), or trimming
+        // clip 2+ silently computed a nonsense value clamped against its own
+        // bounds. Snapping targets: 0, the playhead, and this clip's own
+        // untouched other edge (so dragging one handle can't cross the other).
+        const baseSorted = timeline.clips.filter((c) => (c.trackIndex ?? 0) === 0).sort((a, b) => a.order - b.order);
+        let startOffset = 0;
+        for (const c of baseSorted) {
+          if (c.id === clip.id) break;
+          startOffset += Math.max(0, c.trimOut - c.trimIn);
+        }
+        const duration = clip.trimOut - clip.trimIn;
+        const snapTargets = [0, player.currentTime];
+
+        if (dragging === "start") {
+          const snappedTimelinePos = snapToNearby(sec, snapTargets, pxPerSec);
+          const trimIn = clip.trimIn + (snappedTimelinePos - startOffset);
+          updateTimelineClip(clip.id, { trimIn: Math.max(0, Math.min(trimIn, clip.trimOut - 0.1)) });
+        } else {
+          const item = items.find((i) => i.id === clip.mediaId);
+          const cap = item?.durationSec ?? clip.trimOut + 999;
+          const snappedTimelinePos = snapToNearby(sec, snapTargets, pxPerSec);
+          const trimOut = clip.trimOut + (snappedTimelinePos - (startOffset + duration));
+          updateTimelineClip(clip.id, { trimOut: Math.min(cap, Math.max(trimOut, clip.trimIn + 0.1)) });
+        }
       } else if (dragging === "reorder") {
         reorderTimelineClip(clip.id, xToOrder(e.clientX, clip.id));
       }
     },
-    [dragging, timeline, items, updateTimelineClip, reorderTimelineClip, xToOrder, pxPerSec]
+    [dragging, timeline, items, updateTimelineClip, reorderTimelineClip, xToOrder, pxPerSec, player.currentTime]
   );
 
   const onDropMedia = useCallback(

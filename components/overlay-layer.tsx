@@ -18,7 +18,9 @@ interface OverlayLayerProps {
 // timelineStart + duration) window — simpler than the base track's
 // dual-buffer technique (no gapless-seam requirement for a PiP/watermark
 // layer), at the cost of a brief load/seek pop the first time a given
-// overlay clip becomes active. Muted: the base track carries the audio.
+// overlay clip becomes active. Muted by default (store.addTimelineClip
+// sets muted:true unless told otherwise) — the base track usually carries
+// the audio; unmuting an overlay is opt-in via its volume/muted fields.
 export function OverlayLayer({ masterTime, isPlaying }: OverlayLayerProps) {
   const timeline = useMonkeStore((s) => s.timeline);
   const items = useMonkeStore((s) => s.items);
@@ -57,10 +59,17 @@ function OverlayClipVideo({ clip, src, masterTime, isPlaying }: { clip: Timeline
 
   useEffect(() => {
     const el = ref.current;
+    if (!el) return;
+    el.volume = clip.volume ?? 1;
+    el.muted = clip.muted ?? true;
+  }, [clip.volume, clip.muted]);
+
+  useEffect(() => {
+    const el = ref.current;
     if (!el || !isPlaying) return;
     el.play().catch(() => {});
     return () => el.pause();
   }, [isPlaying]);
 
-  return <video ref={ref} src={src} muted playsInline style={clipLayerStyle(clip)} />;
+  return <video ref={ref} src={src} playsInline style={clipLayerStyle(clip)} />;
 }

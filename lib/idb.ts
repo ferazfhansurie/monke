@@ -1,6 +1,6 @@
 "use client";
 
-import type { ChatMessage, ProjectSettings, Timeline } from "./types";
+import type { ChatMessage, ChatSession, ProjectSettings, Timeline } from "./types";
 
 // Persists project state (not media bytes — those stay on disk, referenced
 // via the FileSystemDirectoryHandle) across reloads/redeploys. Handles are
@@ -22,6 +22,7 @@ export interface PersistedProject {
   timeline: Timeline;
   settings: ProjectSettings;
   messages: ChatMessage[];
+  chatHistory: ChatSession[];
   chatModel: string;
 }
 

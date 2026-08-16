@@ -21,6 +21,22 @@ const STARTERS = [
 
 const MAX_TURNS = 12;
 
+function relativeTime(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
+function sessionPreview(session: { messages: ChatMessage[] }): string {
+  const firstUserText = session.messages.find((m) => m.role === "user")?.parts.find((p) => p.type === "text")?.text;
+  return firstUserText?.trim() || "(empty conversation)";
+}
+
 // Anthropic tool_use.input arrives as unknown JSON — narrow it per-tool
 // before use so a malformed call fails loudly instead of silently no-op-ing.
 function str(input: Record<string, unknown>, key: string): string | undefined {
@@ -344,7 +360,9 @@ async function dispatchTool(name: string, input: Record<string, unknown>): Promi
       const position = parsePosition(input, "position");
       const opacity = num(input, "opacity");
       const mask = parseMask(input, "mask");
-      const clipId = store.addTimelineClip(mediaId, { trimIn, trimOut, order, trackIndex, timelineStart, position, opacity, mask });
+      const volume = num(input, "volume");
+      const muted = typeof input["muted"] === "boolean" ? (input["muted"] as boolean) : undefined;
+      const clipId = store.addTimelineClip(mediaId, { trimIn, trimOut, order, trackIndex, timelineStart, position, opacity, mask, volume, muted });
       const layerNote = (trackIndex ?? 0) > 0 ? ` as an overlay on track ${trackIndex}, starting at ${timelineStart}s` : "";
       return { ok: true, message: `Added clip ${clipId} ("${item.name}") to the timeline${layerNote}.` };
     }
@@ -363,6 +381,8 @@ async function dispatchTool(name: string, input: Record<string, unknown>): Promi
       const position = parsePosition(input, "position");
       const opacity = num(input, "opacity");
       const mask = parseMask(input, "mask");
+      const volume = num(input, "volume");
+      const muted = typeof input["muted"] === "boolean" ? (input["muted"] as boolean) : undefined;
       store.updateTimelineClip(clip.id, {
         trimIn,
         trimOut,
@@ -371,6 +391,8 @@ async function dispatchTool(name: string, input: Record<string, unknown>): Promi
         ...(position ? { position } : {}),
         ...(opacity != null ? { opacity } : {}),
         ...(mask ? { mask } : {}),
+        ...(volume != null ? { volume } : {}),
+        ...(muted != null ? { muted } : {}),
       });
       return { ok: true, message: `Clip ${clip.id} trimmed to ${trimIn.toFixed(1)}s-${trimOut.toFixed(1)}s.` };
     }
@@ -409,12 +431,15 @@ export function ChatPanel() {
   const messages = useMonkeStore((s) => s.messages);
   const pushMessage = useMonkeStore((s) => s.pushMessage);
   const clearChat = useMonkeStore((s) => s.clearChat);
+  const chatHistory = useMonkeStore((s) => s.chatHistory);
+  const restoreChatSession = useMonkeStore((s) => s.restoreChatSession);
   const items = useMonkeStore((s) => s.items);
   const chatModel = useMonkeStore((s) => s.chatModel);
   const setChatModel = useMonkeStore((s) => s.setChatModel);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const currentModel = CHAT_MODELS.find((m) => m.id === chatModel) ?? CHAT_MODELS[0];
 
   // Queued messages sent while the agent is mid-run — held here and drained
@@ -553,9 +578,38 @@ export function ChatPanel() {
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
-        <button type="button" disabled title="Chat history isn't built yet" className="rounded p-1 text-gray-700 cursor-not-allowed">
-          <History className="h-3.5 w-3.5" />
-        </button>
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setHistoryOpen((v) => !v)}
+            disabled={chatHistory.length === 0}
+            className="rounded p-1 text-gray-500 hover:bg-white/10 hover:text-gray-300 disabled:opacity-30 disabled:hover:bg-transparent"
+            title={chatHistory.length === 0 ? "No past conversations yet" : "Chat history"}
+          >
+            <History className="h-3.5 w-3.5" />
+          </button>
+          {historyOpen && chatHistory.length > 0 && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setHistoryOpen(false)} />
+              <div className="absolute right-0 top-full z-50 mt-1 w-64 max-h-72 overflow-y-auto rounded-lg border border-white/10 bg-[#161b22] py-1 shadow-lg">
+                {chatHistory.map((session) => (
+                  <button
+                    key={session.id}
+                    type="button"
+                    onClick={() => {
+                      restoreChatSession(session.id);
+                      setHistoryOpen(false);
+                    }}
+                    className="flex w-full flex-col gap-0.5 px-3 py-2 text-left hover:bg-white/5"
+                  >
+                    <span className="truncate text-[11px] text-gray-300">{sessionPreview(session)}</span>
+                    <span className="text-[10px] text-gray-600">{relativeTime(session.endedAt)}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-4">

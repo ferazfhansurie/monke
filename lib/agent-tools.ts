@@ -60,6 +60,8 @@ export const AGENT_TOOLS: AgentTool[] = [
         position: POSITION_SCHEMA,
         opacity: { type: "number", description: "0-1, default 1. Lower for a semi-transparent watermark." },
         mask: MASK_SCHEMA,
+        volume: { type: "number", description: "0-1, default 1. Lower to duck a clip under narration/music, or use with muted for background music under dialogue." },
+        muted: { type: "boolean", description: "Base-track clips default to unmuted. Overlay clips (track_index >= 1) default to MUTED (avoids a surprise second audio track) — pass muted:false to opt an overlay's audio back in." },
       },
       required: ["media_id"],
     },
@@ -67,7 +69,7 @@ export const AGENT_TOOLS: AgentTool[] = [
   {
     name: "timeline_trim_clip",
     description:
-      "Update an existing timeline clip: trim in/out points, and/or its layering (track_index, timeline_start) and masking (position, opacity, mask). Only pass the fields you want to change — omitted fields are left as-is.",
+      "Update an existing timeline clip: trim in/out points, and/or its layering (track_index, timeline_start), masking (position, opacity, mask), and audio (volume, muted). Only pass the fields you want to change — omitted fields are left as-is.",
     input_schema: {
       type: "object",
       properties: {
@@ -79,6 +81,8 @@ export const AGENT_TOOLS: AgentTool[] = [
         position: POSITION_SCHEMA,
         opacity: { type: "number", description: "0-1." },
         mask: MASK_SCHEMA,
+        volume: { type: "number", description: "0-1. Lower to duck a clip's audio under narration/music playing at the same time." },
+        muted: { type: "boolean" },
       },
       required: ["clip_id"],
     },
