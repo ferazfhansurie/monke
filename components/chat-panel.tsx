@@ -145,6 +145,13 @@ async function dispatchTool(name: string, input: Record<string, unknown>): Promi
     if (name === "generate_stock_clip") {
       const prompt = str(input, "prompt");
       if (!prompt) return { ok: false, message: "prompt is required" };
+      if (input["confirmed"] !== true) {
+        return {
+          ok: false,
+          message:
+            "Not started — this costs real money, so present the plan (prompt, duration, resolution, aspect ratio, intended use) as a message first and wait for the user's explicit go-ahead before calling this tool again with confirmed: true.",
+        };
+      }
       const durationSec = num(input, "duration_seconds");
       const resolution = str(input, "resolution") as "480p" | "720p" | "1080p" | undefined;
       const aspectRatio = str(input, "aspect_ratio");

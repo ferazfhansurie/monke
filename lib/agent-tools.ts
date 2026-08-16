@@ -159,16 +159,20 @@ export const AGENT_TOOLS: AgentTool[] = [
   {
     name: "generate_stock_clip",
     description:
-      "Generate a short stock-style video clip from a text description (e.g. 'an airplane flying through clouds') when the user needs footage they don't have and there's no way to get it from their own files — this is the ONLY legitimate way to add footage that doesn't already exist in the library; never suggest or attempt to download footage from YouTube, Google, or any other website (copyright/ToS violations). Generation costs real money and takes roughly 2 minutes — it does NOT complete within this tool call. Call this once, tell the user it's started and you'll let them know when it's ready, and continue the conversation normally. The clip will be automatically imported into their library and announced in chat when done — don't poll or ask about it yourself.",
+      "Generate a short stock-style video clip from a text description (e.g. 'an airplane flying through clouds') when the user needs footage they don't have and there's no way to get it from their own files — this is the ONLY legitimate way to add footage that doesn't already exist in the library; never suggest or attempt to download footage from YouTube, Google, or any other website (copyright/ToS violations). Generation costs real money and takes roughly 2 minutes — it does NOT complete within this tool call. REQUIRES confirmed:true — you must present the plan (prompt text, duration, resolution, aspect ratio, where it'll be used) as a plain-text message in an EARLIER turn and get the user's explicit go-ahead before calling this with confirmed:true; never plan and call it in the same turn. Once called, tell the user it's started and you'll let them know when it's ready, and continue the conversation normally — the clip is auto-imported and announced in chat when done, don't poll or ask about it yourself.",
     input_schema: {
       type: "object",
       properties: {
-        prompt: { type: "string", description: "A clear visual description of the desired clip, e.g. 'a commercial airplane flying through white clouds, blue sky, seen from below'." },
+        prompt: { type: "string", description: "A clear visual description of the desired clip, e.g. 'a commercial airplane flying through white clouds, blue sky, seen from below'. Must match what you already showed the user in the plan." },
         duration_seconds: { type: "number", description: "4-15, default 5." },
         resolution: { type: "string", enum: ["480p", "720p", "1080p"], description: "Default 720p." },
         aspect_ratio: { type: "string", description: "e.g. '9:16' or '16:9'. Default '9:16' (match the project's vertical default unless the user's project is landscape)." },
+        confirmed: {
+          type: "boolean",
+          description: "Must be true. Only set true after the user has explicitly confirmed the plan you presented in a previous message — never true on the first turn a generation is discussed.",
+        },
       },
-      required: ["prompt"],
+      required: ["prompt", "confirmed"],
     },
   },
   {
