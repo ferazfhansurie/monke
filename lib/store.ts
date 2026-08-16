@@ -449,45 +449,82 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
 // without re-uploading anything. Frame images captured by
 // timeline_probe_clip are stripped before saving (large, and re-derivable
 // on demand) — only the surrounding text/tool-call record is kept.
+async function persistNow(state: MonkeState): Promise<void> {
+  const list = syncActiveProjectIntoList(state);
+  for (const p of list) {
+    const persisted: PersistedProject = {
+      id: p.id,
+      name: p.name,
+      createdAt: p.createdAt,
+      folderHandle: p.folderHandle,
+      timeline: p.timeline,
+      settings: p.settings,
+      messages: p.messages.map((m) => ({ ...m, parts: m.parts.map((part) => ({ ...part, imageDataUrls: undefined })) })),
+      chatModel: p.chatModel,
+    };
+    try {
+      await saveProjectToDb(persisted);
+    } catch (err) {
+      // FileSystemDirectoryHandle is spec-cloneable but not every browser
+      // build honors that reliably inside an IndexedDB transaction — if
+      // the write fails with the handle attached, retry without it rather
+      // than losing the whole project (timeline/chat/settings are still
+      // worth keeping; the user just re-clicks Reconnect Folder).
+      console.error("Failed to save project, retrying without folder handle:", err);
+      try {
+        await saveProjectToDb({ ...persisted, folderHandle: null });
+      } catch (err2) {
+        console.error("Failed to save project at all:", err2);
+      }
+    }
+  }
+  setPersistedActiveProjectId(state.activeProjectId);
+}
+
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 function schedulePersist(state: MonkeState) {
   if (typeof window === "undefined") return;
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
-    const list = syncActiveProjectIntoList(state);
-    for (const p of list) {
-      const persisted: PersistedProject = {
-        id: p.id,
-        name: p.name,
-        createdAt: p.createdAt,
-        folderHandle: p.folderHandle,
-        timeline: p.timeline,
-        settings: p.settings,
-        messages: p.messages.map((m) => ({ ...m, parts: m.parts.map((part) => ({ ...part, imageDataUrls: undefined })) })),
-        chatModel: p.chatModel,
-      };
-      saveProjectToDb(persisted).catch((err) => console.error("Failed to save project:", err));
-    }
-    setPersistedActiveProjectId(state.activeProjectId);
-  }, 600);
+    persistTimer = null;
+    void persistNow(state);
+  }, 400);
+}
+
+function relevantFieldsChanged(state: MonkeState, prev: MonkeState): boolean {
+  return (
+    state.projects !== prev.projects ||
+    state.activeProjectId !== prev.activeProjectId ||
+    state.projectName !== prev.projectName ||
+    state.folderHandle !== prev.folderHandle ||
+    state.timeline !== prev.timeline ||
+    state.settings !== prev.settings ||
+    state.messages !== prev.messages ||
+    state.chatModel !== prev.chatModel
+  );
 }
 
 if (typeof window !== "undefined") {
   useMonkeStore.subscribe((state, prev) => {
     if (!state.hydrated) return; // don't stomp saved data with pre-hydration defaults
-    if (
-      state.projects !== prev.projects ||
-      state.activeProjectId !== prev.activeProjectId ||
-      state.projectName !== prev.projectName ||
-      state.folderHandle !== prev.folderHandle ||
-      state.timeline !== prev.timeline ||
-      state.settings !== prev.settings ||
-      state.messages !== prev.messages ||
-      state.chatModel !== prev.chatModel
-    ) {
-      schedulePersist(state);
-    }
+    if (relevantFieldsChanged(state, prev)) schedulePersist(state);
   });
+
+  // A 400ms debounce timer is lost outright if the page unloads before it
+  // fires — "do something, then immediately refresh/close" would silently
+  // drop that last change. Flush immediately (persistTimer !== null means
+  // a save is pending) whenever the page is about to go away, instead of
+  // only on the debounce.
+  const flushOnHide = () => {
+    if (persistTimer === null) return;
+    clearTimeout(persistTimer);
+    persistTimer = null;
+    void persistNow(useMonkeStore.getState());
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushOnHide();
+  });
+  window.addEventListener("pagehide", flushOnHide);
 }
 
 // --- Hydration ----------------------------------------------------------
