@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Sparkles, Film, Captions, Mic, Music, FolderTree, Send, Plus, History, Loader2, ChevronDown, Check } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { CHAT_MODELS } from "@/lib/models";
+import { captureFrame } from "@/lib/fs";
 import type { ChatMessage, ChatMessagePart } from "@/lib/types";
 
 const STARTERS = [
@@ -15,7 +16,7 @@ const STARTERS = [
   { icon: FolderTree, label: "Organize my media into structured folders" },
 ];
 
-const MAX_TURNS = 6;
+const MAX_TURNS = 8;
 
 // Anthropic tool_use.input arrives as unknown JSON — narrow it per-tool
 // before use so a malformed call fails loudly instead of silently no-op-ing.
@@ -37,6 +38,18 @@ function toAnthropicMessages(messages: ChatMessage[]): Array<{ role: "user" | "a
     content: m.parts.map((p) => {
       if (p.type === "text") return { type: "text", text: p.text ?? "" };
       if (p.type === "tool_use") return { type: "tool_use", id: p.toolUseId, name: p.name, input: p.input ?? {} };
+      if (p.type === "tool_result" && p.imageDataUrl) {
+        const match = /^data:([^;]+);base64,(.+)$/.exec(p.imageDataUrl);
+        return {
+          type: "tool_result",
+          tool_use_id: p.toolUseId,
+          is_error: p.isError || undefined,
+          content: [
+            { type: "text", text: p.content ?? "" },
+            { type: "image", source: { type: "base64", media_type: match?.[1] ?? "image/jpeg", data: match?.[2] ?? "" } },
+          ],
+        };
+      }
       return { type: "tool_result", tool_use_id: p.toolUseId, content: p.content ?? "", is_error: p.isError || undefined };
     }),
   }));
@@ -64,11 +77,41 @@ function buildTimelineContext(): string {
 interface ToolResult {
   ok: boolean;
   message: string;
+  imageDataUrl?: string;
 }
 
-function dispatchTool(name: string, input: Record<string, unknown>): ToolResult {
+async function dispatchTool(name: string, input: Record<string, unknown>): Promise<ToolResult> {
   const store = useMonkeStore.getState();
   try {
+    if (name === "timeline_probe_clip") {
+      const clipId = str(input, "clip_id");
+      const mediaIdInput = str(input, "media_id");
+      let item: (typeof store.items)[number] | undefined;
+      let atSeconds = 0;
+      let label = "";
+      if (clipId) {
+        const clip = store.timeline.clips.find((c) => c.id === clipId);
+        if (!clip) return { ok: false, message: `No timeline clip with id "${clipId}".` };
+        item = store.items.find((i) => i.id === clip.mediaId);
+        if (!item) return { ok: false, message: "That clip's source media isn't in the library." };
+        const dur = Math.max(0, clip.trimOut - clip.trimIn);
+        const offset = num(input, "at_seconds") ?? dur / 2;
+        atSeconds = clip.trimIn + Math.min(Math.max(0, offset), dur);
+        label = `clip ${clipId} at ${offset.toFixed(1)}s into its trimmed range`;
+      } else if (mediaIdInput) {
+        item = store.items.find((i) => i.id === mediaIdInput);
+        if (!item) return { ok: false, message: `No library item with id "${mediaIdInput}".` };
+        atSeconds = num(input, "at_seconds") ?? (item.durationSec ?? 0) / 2;
+        label = `media ${mediaIdInput} at ${atSeconds.toFixed(1)}s`;
+      } else {
+        return { ok: false, message: "Provide either clip_id or media_id." };
+      }
+      if (item.kind !== "video" && item.kind !== "image") {
+        return { ok: false, message: `"${item.name}" is ${item.kind}, not video or image — nothing to see.` };
+      }
+      const imageDataUrl = await captureFrame(item, atSeconds);
+      return { ok: true, message: `Captured a frame from ${label} ("${item.name}").`, imageDataUrl };
+    }
     if (name === "timeline_add_clip") {
       const mediaId = str(input, "media_id");
       if (!mediaId) return { ok: false, message: "media_id is required" };
@@ -124,6 +167,7 @@ function dispatchTool(name: string, input: Record<string, unknown>): ToolResult 
 export function ChatPanel() {
   const messages = useMonkeStore((s) => s.messages);
   const pushMessage = useMonkeStore((s) => s.pushMessage);
+  const clearChat = useMonkeStore((s) => s.clearChat);
   const items = useMonkeStore((s) => s.items);
   const chatModel = useMonkeStore((s) => s.chatModel);
   const setChatModel = useMonkeStore((s) => s.setChatModel);
@@ -165,10 +209,12 @@ export function ChatPanel() {
         const toolUses = content.filter((b) => b.type === "tool_use");
         if (toolUses.length === 0) break;
 
-        const resultParts: ChatMessagePart[] = toolUses.map((tu) => {
-          const result = dispatchTool(tu.name!, tu.input || {});
-          return { type: "tool_result", toolUseId: tu.id, content: result.message, isError: !result.ok };
-        });
+        const resultParts: ChatMessagePart[] = await Promise.all(
+          toolUses.map(async (tu) => {
+            const result = await dispatchTool(tu.name!, tu.input || {});
+            return { type: "tool_result" as const, toolUseId: tu.id, content: result.message, isError: !result.ok, imageDataUrl: result.imageDataUrl };
+          })
+        );
         const resultMsg = pushMessage("user", resultParts);
         history = [...history, resultMsg];
       }
@@ -182,12 +228,18 @@ export function ChatPanel() {
   return (
     <div className="flex h-full flex-col border-r border-white/10 bg-[#0d1117]">
       <div className="flex items-center gap-2 border-b border-white/10 px-2.5 py-2">
-        <span className="text-[11px] font-semibold text-gray-300">New chat</span>
+        <span className="text-[11px] font-semibold text-gray-300">{messages.length === 0 ? "New chat" : "Chat"}</span>
         <div className="flex-1" />
-        <button type="button" className="rounded p-1 text-gray-500 hover:bg-white/10 hover:text-gray-300" title="New chat">
+        <button
+          type="button"
+          onClick={() => clearChat()}
+          disabled={messages.length === 0 || loading}
+          className="rounded p-1 text-gray-500 hover:bg-white/10 hover:text-gray-300 disabled:opacity-30 disabled:hover:bg-transparent"
+          title="New chat — clears the current conversation"
+        >
           <Plus className="h-3.5 w-3.5" />
         </button>
-        <button type="button" className="rounded p-1 text-gray-500 hover:bg-white/10 hover:text-gray-300" title="History">
+        <button type="button" disabled title="Chat history isn't built yet" className="rounded p-1 text-gray-700 cursor-not-allowed">
           <History className="h-3.5 w-3.5" />
         </button>
       </div>
@@ -236,7 +288,13 @@ export function ChatPanel() {
                           <span className="font-mono text-[#f26522]/80">{p.name}</span>
                         </span>
                       ) : (
-                        <span className={p.isError ? "text-red-400/80" : ""}>{p.content}</span>
+                        <div className="flex flex-col gap-1.5">
+                          <span className={p.isError ? "text-red-400/80" : ""}>{p.content}</span>
+                          {p.imageDataUrl && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={p.imageDataUrl} alt="Captured frame" className="max-h-32 rounded border border-white/10 object-contain" />
+                          )}
+                        </div>
                       )}
                     </div>
                   ))}

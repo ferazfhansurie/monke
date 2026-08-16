@@ -1,6 +1,6 @@
 "use client";
 
-import type { RefObject } from "react";
+import { useRef, type RefObject } from "react";
 import { Play, Pause, SkipBack, SkipForward, StepBack, StepForward, Maximize2 } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import type { useTimelinePlayer } from "@/lib/timeline-player";
@@ -24,19 +24,28 @@ interface PreviewPlayerProps {
 // drive the SAME playback engine, not two independent ones.
 export function PreviewPlayer({ player, videoElA, videoElB }: PreviewPlayerProps) {
   const settings = useMonkeStore((s) => s.settings);
+  const stageRef = useRef<HTMLDivElement>(null);
 
   const aspect = settings.resolutionW / settings.resolutionH;
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      stageRef.current?.requestFullscreen().catch(() => {});
+    }
+  };
 
   return (
     <div className="flex h-full flex-col bg-[#050607]">
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-1.5">
         <span className="text-[11px] font-semibold text-gray-300">Timeline 1</span>
-        <button type="button" className="rounded p-1 text-gray-500 hover:bg-white/10 hover:text-gray-300">
+        <button type="button" onClick={toggleFullscreen} className="rounded p-1 text-gray-500 hover:bg-white/10 hover:text-gray-300" title="Fullscreen preview">
           <Maximize2 className="h-3 w-3" />
         </button>
       </div>
 
-      <div className="relative flex flex-1 items-center justify-center overflow-hidden p-4">
+      <div ref={stageRef} className="relative flex flex-1 items-center justify-center overflow-hidden bg-black p-4">
         <div className="relative h-full max-h-full" style={{ aspectRatio: aspect }}>
           <video ref={videoElA} className={`absolute inset-0 h-full w-full object-contain ${player.activeSlot === 0 ? "opacity-100" : "opacity-0"}`} playsInline />
           <video ref={videoElB} className={`absolute inset-0 h-full w-full object-contain ${player.activeSlot === 1 ? "opacity-100" : "opacity-0"}`} playsInline />

@@ -84,6 +84,58 @@ async function probeImage(url: string): Promise<{ width: number; height: number 
   });
 }
 
+// Captures a single still frame as a downscaled JPEG data URL — the only
+// way the AI can "see" footage content, since media is never uploaded.
+// Reads the file fresh from the handle rather than reusing item.objectUrl
+// so this works even if that URL was already revoked.
+export async function captureFrame(item: MediaItem, atSeconds = 0): Promise<string> {
+  const file = await item.handle.getFile();
+  const url = URL.createObjectURL(file);
+  const MAX_DIM = 768;
+  try {
+    if (item.kind === "image") {
+      return await new Promise<string>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const scale = Math.min(1, MAX_DIM / Math.max(img.naturalWidth, img.naturalHeight));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+          canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return reject(new Error("Canvas unavailable"));
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/jpeg", 0.7));
+        };
+        img.onerror = () => reject(new Error("Couldn't read image"));
+        img.src = url;
+      });
+    }
+    return await new Promise<string>((resolve, reject) => {
+      const v = document.createElement("video");
+      v.preload = "auto";
+      v.muted = true;
+      v.playsInline = true;
+      v.src = url;
+      v.onloadedmetadata = () => {
+        v.currentTime = Math.min(Math.max(0, atSeconds), Math.max(0, v.duration - 0.05));
+      };
+      v.onseeked = () => {
+        const scale = Math.min(1, MAX_DIM / Math.max(v.videoWidth, v.videoHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(v.videoWidth * scale));
+        canvas.height = Math.max(1, Math.round(v.videoHeight * scale));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return reject(new Error("Canvas unavailable"));
+        ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.7));
+      };
+      v.onerror = () => reject(new Error("Couldn't read frame"));
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export async function buildMediaItem(handle: FileSystemFileHandle, kind: MediaKind): Promise<MediaItem> {
   const file = await handle.getFile();
   const objectUrl = URL.createObjectURL(file);

@@ -4,10 +4,10 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Download, User, LogOut } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
+import { ProjectSwitcher } from "./project-switcher";
 
 export function TopBar() {
   const router = useRouter();
-  const projectName = useMonkeStore((s) => s.projectName);
   const user = useMonkeStore((s) => s.user);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -20,12 +20,15 @@ export function TopBar() {
     <div className="flex h-9 shrink-0 items-center justify-between border-b border-white/10 bg-[#0d1117] px-3">
       <div className="flex items-center gap-2">
         <span className="text-[13px] font-bold tracking-tight text-white">MONKe</span>
-        <span className="text-[11px] text-gray-600">{projectName}</span>
+        <span className="text-gray-700">/</span>
+        <ProjectSwitcher />
       </div>
       <div className="flex items-center gap-2">
         <button
           type="button"
-          className="flex items-center gap-1.5 rounded-md bg-[#f26522] px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-[#d9541a] transition-colors"
+          disabled
+          title="Export isn't built yet"
+          className="flex items-center gap-1.5 rounded-md bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-gray-600 cursor-not-allowed"
         >
           <Download className="h-3 w-3" /> Export
         </button>

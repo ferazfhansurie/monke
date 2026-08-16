@@ -77,4 +77,21 @@ export const AGENT_TOOLS: AgentTool[] = [
       required: ["clip_id"],
     },
   },
+  {
+    name: "timeline_probe_clip",
+    description:
+      "Capture and view a single still frame from a clip or library item — this is your ONLY way to see what footage actually shows. Provide clip_id (samples within that timeline clip's trimmed range) or media_id (samples the raw source). Call it more than once at different at_seconds to sample multiple moments before describing a clip's content, since one frame rarely tells the whole story.",
+    input_schema: {
+      type: "object",
+      properties: {
+        clip_id: { type: "string", description: "Timeline clip id, from CURRENT TIMELINE. Use this OR media_id." },
+        media_id: { type: "string", description: "Library item id, from CURRENT LIBRARY. Use this OR clip_id." },
+        at_seconds: {
+          type: "number",
+          description:
+            "Offset in seconds to sample. For clip_id this is relative to the clip's own trimmed range (0 = the clip's in-point). For media_id it's relative to the raw source. Defaults to the midpoint.",
+        },
+      },
+    },
+  },
 ];

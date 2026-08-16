@@ -22,6 +22,10 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
   const splitTimelineClip = useMonkeStore((s) => s.splitTimelineClip);
   const addTimelineClip = useMonkeStore((s) => s.addTimelineClip);
   const frameRate = useMonkeStore((s) => s.settings.frameRate);
+  const timelineUndoStack = useMonkeStore((s) => s.timelineUndoStack);
+  const timelineRedoStack = useMonkeStore((s) => s.timelineRedoStack);
+  const undoTimeline = useMonkeStore((s) => s.undoTimeline);
+  const redoTimeline = useMonkeStore((s) => s.redoTimeline);
 
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [dragging, setDragging] = useState<DragKind>(null);
@@ -148,19 +152,35 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         player.seek(player.currentTime + 1 / frameRate);
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redoTimeline();
+        else undoTimeline();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [player, splitAtPlayhead, deleteSelected, frameRate]);
+  }, [player, splitAtPlayhead, deleteSelected, frameRate, undoTimeline, redoTimeline]);
 
   return (
     <div className="flex h-full flex-col bg-[#0a0c10]">
       <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5">
-        <button type="button" className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300">
+        <button
+          type="button"
+          onClick={undoTimeline}
+          disabled={timelineUndoStack.length === 0}
+          className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300 disabled:opacity-30 disabled:hover:bg-transparent"
+          title="Undo"
+        >
           <Undo className="h-3.5 w-3.5" />
         </button>
-        <button type="button" className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300">
+        <button
+          type="button"
+          onClick={redoTimeline}
+          disabled={timelineRedoStack.length === 0}
+          className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300 disabled:opacity-30 disabled:hover:bg-transparent"
+          title="Redo"
+        >
           <Redo className="h-3.5 w-3.5" />
         </button>
         <div className="mx-1 h-4 w-px bg-white/10" />
@@ -175,7 +195,7 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
-        <button type="button" className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300" title="Add text">
+        <button type="button" disabled title="Text clips aren't built yet" className="rounded p-1.5 text-gray-700 cursor-not-allowed">
           <Type className="h-3.5 w-3.5" />
         </button>
         <div className="flex-1" />
