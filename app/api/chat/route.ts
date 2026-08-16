@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { requireUser } from "@/lib/auth";
 import { AGENT_TOOLS } from "@/lib/agent-tools";
 import { DEFAULT_CHAT_MODEL, isValidChatModel } from "@/lib/models";
+import { getBillingInfo, deductCredits, creditsForChatUsage } from "@/lib/billing";
 
 export const maxDuration = 60;
 
@@ -91,6 +92,14 @@ export async function POST(req: NextRequest) {
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
+  const billing = await getBillingInfo(user.id);
+  if (!billing?.subscriptionActive) {
+    return NextResponse.json({ error: "Your MONKe subscription isn't active. Subscribe to keep editing.", code: "subscription_required" }, { status: 402 });
+  }
+  if (billing.credits <= 0) {
+    return NextResponse.json({ error: "You're out of credits for this billing period. Upgrade your plan or wait for renewal.", code: "out_of_credits" }, { status: 402 });
+  }
+
   if (!process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json({ error: "The editing agent isn't configured on this deployment yet (missing ANTHROPIC_API_KEY)." }, { status: 500 });
   }
@@ -115,6 +124,9 @@ export async function POST(req: NextRequest) {
       tools: AGENT_TOOLS.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema })),
       messages: messages as Anthropic.MessageParam[],
     });
+
+    const cost = creditsForChatUsage(resolvedModel, response.usage.input_tokens, response.usage.output_tokens);
+    await deductCredits(user.id, cost);
 
     return NextResponse.json({ content: response.content, stop_reason: response.stop_reason });
   } catch (err) {

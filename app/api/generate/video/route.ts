@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { getBillingInfo, creditsForGeneration } from "@/lib/billing";
 
 export const maxDuration = 30;
 
@@ -15,6 +16,14 @@ const ARK_CREATE_URL = "https://ark.ap-southeast.bytepluses.com/api/v3/contents/
 export async function POST(req: NextRequest) {
   const user = await requireUser(req);
   if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
+  const billing = await getBillingInfo(user.id);
+  if (!billing?.subscriptionActive) {
+    return NextResponse.json({ error: "Your MONKe subscription isn't active. Subscribe to generate clips.", code: "subscription_required" }, { status: 402 });
+  }
+  if (billing.credits < creditsForGeneration()) {
+    return NextResponse.json({ error: `Not enough credits for a generation (needs ${creditsForGeneration()}, you have ${billing.credits}). Upgrade or wait for renewal.`, code: "out_of_credits" }, { status: 402 });
+  }
 
   if (!process.env.ARK_API_KEY) {
     return NextResponse.json({ error: "Video generation isn't configured on this deployment (missing ARK_API_KEY)." }, { status: 500 });

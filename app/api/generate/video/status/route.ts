@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { deductCredits, creditsForGeneration } from "@/lib/billing";
 
 export const maxDuration = 60;
 
@@ -40,6 +41,13 @@ export async function GET(req: NextRequest) {
       if (buffer.length === 0) return NextResponse.json({ status: "failed", error: "The generated video download was empty." });
       const mimeType = videoRes.headers.get("content-type") || "video/mp4";
       const videoDataUrl = `data:${mimeType};base64,${buffer.toString("base64")}`;
+
+      // Charged only on this success path — a failed/expired job never
+      // reaches here, so nothing is deducted for generations that didn't
+      // actually deliver a video. Client-side polling already stops as
+      // soon as "completed" is seen once, which is the practical guard
+      // against double-charging on retries.
+      await deductCredits(user.id, creditsForGeneration());
 
       return NextResponse.json({ status: "completed", videoDataUrl });
     }

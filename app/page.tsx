@@ -20,6 +20,11 @@ export default function Home() {
           return;
         }
         setUser(data.user);
+        const billing = await fetch("/api/billing/status").then((r) => r.json());
+        if (!billing.subscriptionActive) {
+          router.replace("/pricing");
+          return;
+        }
         await hydrateMonkeStore();
         setReady(true);
       })

@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { Download, User, LogOut } from "lucide-react";
+import { Download, User, LogOut, CreditCard, Coins } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { ProjectSwitcher } from "./project-switcher";
 
@@ -11,10 +11,30 @@ export function TopBar() {
   const router = useRouter();
   const user = useMonkeStore((s) => s.user);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [credits, setCredits] = useState<number | null>(null);
+  const [portalLoading, setPortalLoading] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/billing/status")
+      .then((r) => r.json())
+      .then((data) => setCredits(typeof data.credits === "number" ? data.credits : null))
+      .catch(() => {});
+  }, []);
 
   const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
     router.replace("/login");
+  };
+
+  const manageBilling = async () => {
+    setPortalLoading(true);
+    try {
+      const res = await fetch("/api/billing/portal", { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.url) window.location.assign(data.url);
+    } finally {
+      setPortalLoading(false);
+    }
   };
 
   return (
@@ -25,6 +45,11 @@ export function TopBar() {
         <ProjectSwitcher />
       </div>
       <div className="flex items-center gap-2">
+        {credits != null && (
+          <span className="flex items-center gap-1 rounded-md bg-white/5 px-2 py-1 text-[10px] font-semibold text-gray-400" title="Credit balance">
+            <Coins className="h-3 w-3 text-[#f26522]" /> {credits.toLocaleString()}
+          </span>
+        )}
         <button
           type="button"
           disabled
@@ -45,6 +70,14 @@ export function TopBar() {
           {menuOpen && (
             <div className="absolute right-0 top-full z-50 mt-1 w-44 rounded-md border border-white/10 bg-[#161b22] py-1 shadow-lg">
               <div className="truncate border-b border-white/10 px-3 py-1.5 text-[11px] text-gray-400">{user?.email}</div>
+              <button
+                type="button"
+                onClick={manageBilling}
+                disabled={portalLoading}
+                className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[12px] text-gray-300 hover:bg-white/5 disabled:opacity-50"
+              >
+                <CreditCard className="h-3 w-3" /> Manage billing
+              </button>
               <button
                 type="button"
                 onClick={logout}
