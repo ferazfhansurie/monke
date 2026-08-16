@@ -39,20 +39,19 @@ async function getAsrPipeline(): Promise<any> {
           setAsrStatus(null);
         }
       };
-      try {
-        // q8 (~250MB total) loads fine on native/Node ONNX backends — but
-        // whisper's decoder embedding layer ships 4-bit block-quantized
-        // (MatMulNBits) even under the "q8" preset, and older ONNX Runtime
-        // Web WASM builds have a broken Transpose+Dequantize fusion pass for
-        // that op ("TransposeDQWeightsForMatMulNBits Missing required
-        // scale"), confirmed failing every time (not intermittent) for the
-        // whisper-base q8 export. Try it first since it's smaller and faster
-        // when it works, and fall back to fp32 (~970MB) if the WASM backend
-        // can't initialize it.
-        return await pipeline("automatic-speech-recognition", "Xenova/whisper-small", { dtype: "q8", progress_callback });
-      } catch {
-        return await pipeline("automatic-speech-recognition", "Xenova/whisper-small", { dtype: "fp32", progress_callback });
-      }
+      // fp32, not a quantized dtype: confirmed in production that whisper's
+      // decoder embedding layer ships 4-bit block-quantized (MatMulNBits)
+      // under the "q8" preset for whisper-small too (not just whisper-base),
+      // and ONNX Runtime Web's WASM backend can't create a session for it
+      // ("TransposeDQWeightsForMatMulNBits Missing required scale") —
+      // reliably, not intermittently. A try/q8-then-catch/fp32 fallback
+      // isn't safe here either: a failed WASM session creation can leave the
+      // runtime in a state where the very next session creation attempt
+      // fails too, even for an architecturally unrelated (non-quantized)
+      // model, so don't gamble on q8 in the same page load at all — fp32
+      // costs a larger download (~970MB) but is the one dtype confirmed to
+      // actually work.
+      return await pipeline("automatic-speech-recognition", "Xenova/whisper-small", { dtype: "fp32", progress_callback });
     })()
       .catch((err) => {
         // Don't let a failed load poison every future attempt — clear the
