@@ -3,7 +3,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { FolderOpen, Import, Search, LayoutGrid, Film, Music, Image as ImageIcon, RefreshCw, Trash2 } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
-import { openProjectFolder, listMediaHandles, buildMediaItem, isFileSystemAccessSupported, pickFiles } from "@/lib/fs";
+import { openProjectFolder, listMediaHandles, buildMediaItem, isFileSystemAccessSupported, pickFiles, kindForMimeType, kindForName } from "@/lib/fs";
 
 function fmtDuration(sec?: number) {
   if (sec == null) return "";
@@ -29,6 +29,7 @@ export function MediaLibrary() {
   const folderNeedsReconnect = useMonkeStore((s) => s.folderNeedsReconnect);
   const reconnectFolder = useMonkeStore((s) => s.reconnectFolder);
   const [reconnecting, setReconnecting] = useState(false);
+  const [importWarning, setImportWarning] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
@@ -75,8 +76,12 @@ export function MediaLibrary() {
       fileInputRef.current?.click();
       return;
     }
+    setImportWarning(null);
     try {
-      const picked = await pickFiles();
+      const { items: picked, skipped } = await pickFiles();
+      if (skipped.length > 0) {
+        setImportWarning(`Skipped ${skipped.length === 1 ? "1 file" : `${skipped.length} files`} MONKe couldn't recognize as media: ${skipped.join(", ")}`);
+      }
       setLoadingFolder(true);
       setLoadProgress({ done: 0, total: picked.length });
       for (let i = 0; i < picked.length; i++) {
@@ -88,6 +93,7 @@ export function MediaLibrary() {
     } catch (err) {
       if (err instanceof Error && err.name !== "AbortError") {
         console.error("Failed to import files:", err);
+        setImportWarning(`Import failed: ${err.message}`);
       }
     } finally {
       setLoadingFolder(false);
@@ -101,11 +107,17 @@ export function MediaLibrary() {
   const importFilesFallback = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(e.target.files || []);
+      setImportWarning(null);
       setLoadingFolder(true);
       setLoadProgress({ done: 0, total: files.length });
+      const skipped: string[] = [];
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const kind = file.type.startsWith("video/") ? "video" : file.type.startsWith("audio/") ? "audio" : file.type.startsWith("image/") ? "image" : null;
+        // MIME type first (usually reliable), extension as a fallback for
+        // formats the browser doesn't set a .type for — same two-layer
+        // check as the FSA import path, just in the opposite priority
+        // order since a browser-reported type is normally trustworthy here.
+        const kind = kindForMimeType(file.type) ?? kindForName(file.name);
         if (kind) {
           // Fake a minimal FileSystemFileHandle-shaped wrapper so the rest
           // of the app doesn't need a second code path.
@@ -116,8 +128,13 @@ export function MediaLibrary() {
           } as unknown as FileSystemFileHandle;
           const item = await buildMediaItem(pseudoHandle, kind);
           addItem(item);
+        } else {
+          skipped.push(file.name);
         }
         setLoadProgress({ done: i + 1, total: files.length });
+      }
+      if (skipped.length > 0) {
+        setImportWarning(`Skipped ${skipped.length === 1 ? "1 file" : `${skipped.length} files`} MONKe couldn't recognize as media: ${skipped.join(", ")}`);
       }
       setLoadingFolder(false);
       setLoadProgress(null);
@@ -170,6 +187,15 @@ export function MediaLibrary() {
       {loadProgress && (
         <div className="px-2.5 pb-2 text-[10px] text-[#f26522]">
           Loading {loadProgress.done}/{loadProgress.total}…
+        </div>
+      )}
+
+      {importWarning && (
+        <div className="mx-2 mb-2 flex items-start gap-1.5 rounded-md border border-yellow-500/30 bg-yellow-500/5 px-2.5 py-2">
+          <p className="flex-1 text-[10px] text-gray-300">{importWarning}</p>
+          <button type="button" onClick={() => setImportWarning(null)} className="shrink-0 text-[10px] text-gray-500 hover:text-gray-300">
+            ✕
+          </button>
         </div>
       )}
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sparkles, Film, Captions, Mic, Music, FolderTree, Send, Plus, History, Loader2, ChevronDown, Check, Square, X } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { CHAT_MODELS } from "@/lib/models";
@@ -451,6 +451,14 @@ export function ChatPanel() {
   const queueRef = useRef<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const stoppedByUserRef = useRef(false);
+  const messageListRef = useRef<HTMLDivElement>(null);
+
+  // A silently-stopped conversation (no error, no visible reply) reads as
+  // "did it stop?" just as much as an actual bug does, if the newest
+  // message isn't in view. Always scroll to the latest message/state.
+  useEffect(() => {
+    messageListRef.current?.scrollTo({ top: messageListRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, loading]);
 
   const dequeueAndSendNext = () => {
     const next = queueRef.current.shift();
@@ -515,11 +523,19 @@ export function ChatPanel() {
         // (e.g. "thinking") — anything else was previously falling through
         // to the tool_use branch with no id, producing a malformed tool_use
         // block that Anthropic's API then rejected on the next turn.
-        const assistantParts: ChatMessagePart[] = content.flatMap((block): ChatMessagePart[] => {
+        let assistantParts: ChatMessagePart[] = content.flatMap((block): ChatMessagePart[] => {
           if (block.type === "text") return [{ type: "text", text: block.text }];
           if (block.type === "tool_use" && block.id) return [{ type: "tool_use", name: block.name, input: block.input, toolUseId: block.id }];
           return [];
         });
+        // A response with no visible text/tool_use parts (e.g. an empty or
+        // whitespace-only text block) renders as literally nothing —
+        // the conversation just silently stops with no error and no
+        // indication anything happened. Never let a turn vanish silently.
+        const hasVisibleContent = assistantParts.some((p) => (p.type === "text" && p.text?.trim()) || p.type === "tool_use");
+        if (!hasVisibleContent) {
+          assistantParts = [{ type: "text", text: "_(No response for that message — try rephrasing or asking again.)_" }];
+        }
         const assistantMsg = pushMessage("assistant", assistantParts);
         history = [...history, assistantMsg];
 
@@ -612,7 +628,7 @@ export function ChatPanel() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 py-4">
+      <div ref={messageListRef} className="flex-1 overflow-y-auto px-3 py-4">
         {messages.length === 0 ? (
           <div className="flex flex-col gap-4">
             <p className="text-[11px] font-medium text-gray-500">Ask anything, or start with:</p>

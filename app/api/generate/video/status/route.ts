@@ -13,17 +13,17 @@ const ARK_TASK_URL = "https://ark.ap-southeast.bytepluses.com/api/v3/contents/ge
 // bytes get handed straight to the browser, exactly like a locally-imported
 // file from that point on.
 export async function GET(req: NextRequest) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-
-  if (!process.env.ARK_API_KEY) {
-    return NextResponse.json({ error: "Video generation isn't configured on this deployment (missing ARK_API_KEY)." }, { status: 500 });
-  }
-
-  const requestId = req.nextUrl.searchParams.get("requestId");
-  if (!requestId) return NextResponse.json({ error: "requestId is required" }, { status: 400 });
-
   try {
+    const user = await requireUser(req);
+    if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
+    if (!process.env.ARK_API_KEY) {
+      return NextResponse.json({ error: "Video generation isn't configured on this deployment (missing ARK_API_KEY)." }, { status: 500 });
+    }
+
+    const requestId = req.nextUrl.searchParams.get("requestId");
+    if (!requestId) return NextResponse.json({ error: "requestId is required" }, { status: 400 });
+
     const taskRes = await fetch(`${ARK_TASK_URL}/${encodeURIComponent(requestId)}`, {
       headers: { Authorization: `Bearer ${process.env.ARK_API_KEY}` },
     });

@@ -10,17 +10,21 @@ import { getBillingInfo } from "@/lib/billing";
 // pattern) — to change plans for now, cancel here and start a new
 // subscription from /pricing.
 export async function POST(req: NextRequest) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  try {
+    const user = await requireUser(req);
+    if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
-  const billing = await getBillingInfo(user.id);
-  if (!billing?.stripeCustomerId) return NextResponse.json({ error: "No billing account yet" }, { status: 400 });
+    const billing = await getBillingInfo(user.id);
+    if (!billing?.stripeCustomerId) return NextResponse.json({ error: "No billing account yet" }, { status: 400 });
 
-  const stripe = getStripe();
-  const session = await stripe.billingPortal.sessions.create({
-    customer: billing.stripeCustomerId,
-    return_url: req.nextUrl.origin,
-  });
+    const stripe = getStripe();
+    const session = await stripe.billingPortal.sessions.create({
+      customer: billing.stripeCustomerId,
+      return_url: req.nextUrl.origin,
+    });
 
-  return NextResponse.json({ url: session.url });
+    return NextResponse.json({ url: session.url });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Couldn't open billing portal" }, { status: 500 });
+  }
 }

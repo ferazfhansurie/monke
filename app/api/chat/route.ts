@@ -89,22 +89,28 @@ function getAnthropic(): Anthropic {
 }
 
 export async function POST(req: NextRequest) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-
-  const billing = await getBillingInfo(user.id);
-  if (!billing?.subscriptionActive) {
-    return NextResponse.json({ error: "Your MONKe subscription isn't active. Subscribe to keep editing.", code: "subscription_required" }, { status: 402 });
-  }
-  if (billing.credits <= 0) {
-    return NextResponse.json({ error: "You're out of credits for this billing period. Upgrade your plan or wait for renewal.", code: "out_of_credits" }, { status: 402 });
-  }
-
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return NextResponse.json({ error: "The editing agent isn't configured on this deployment yet (missing ANTHROPIC_API_KEY)." }, { status: 500 });
-  }
-
+  // Everything below (including requireUser/billing, both of which do DB
+  // work) is inside this single try/catch — an uncaught exception anywhere
+  // here previously produced Next.js's default HTML error page instead of
+  // JSON, which the client would fail to parse. Whether that ever actually
+  // fires isn't the point: a route that talks to a database and a 3rd-party
+  // API must never let the client see anything but a clean JSON error.
   try {
+    const user = await requireUser(req);
+    if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
+    const billing = await getBillingInfo(user.id);
+    if (!billing?.subscriptionActive) {
+      return NextResponse.json({ error: "Your MONKe subscription isn't active. Subscribe to keep editing.", code: "subscription_required" }, { status: 402 });
+    }
+    if (billing.credits <= 0) {
+      return NextResponse.json({ error: "You're out of credits for this billing period. Upgrade your plan or wait for renewal.", code: "out_of_credits" }, { status: 402 });
+    }
+
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return NextResponse.json({ error: "The editing agent isn't configured on this deployment yet (missing ANTHROPIC_API_KEY)." }, { status: 500 });
+    }
+
     const { messages, timelineContext, model } = await req.json();
     if (!Array.isArray(messages) || messages.length === 0) {
       return NextResponse.json({ error: "messages is required" }, { status: 400 });

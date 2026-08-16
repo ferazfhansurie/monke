@@ -14,22 +14,22 @@ const ARK_MODEL = "dreamina-seedance-2-0-fast-260128";
 const ARK_CREATE_URL = "https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks";
 
 export async function POST(req: NextRequest) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-
-  const billing = await getBillingInfo(user.id);
-  if (!billing?.subscriptionActive) {
-    return NextResponse.json({ error: "Your MONKe subscription isn't active. Subscribe to generate clips.", code: "subscription_required" }, { status: 402 });
-  }
-  if (billing.credits < creditsForGeneration()) {
-    return NextResponse.json({ error: `Not enough credits for a generation (needs ${creditsForGeneration()}, you have ${billing.credits}). Upgrade or wait for renewal.`, code: "out_of_credits" }, { status: 402 });
-  }
-
-  if (!process.env.ARK_API_KEY) {
-    return NextResponse.json({ error: "Video generation isn't configured on this deployment (missing ARK_API_KEY)." }, { status: 500 });
-  }
-
   try {
+    const user = await requireUser(req);
+    if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
+    const billing = await getBillingInfo(user.id);
+    if (!billing?.subscriptionActive) {
+      return NextResponse.json({ error: "Your MONKe subscription isn't active. Subscribe to generate clips.", code: "subscription_required" }, { status: 402 });
+    }
+    if (billing.credits < creditsForGeneration()) {
+      return NextResponse.json({ error: `Not enough credits for a generation (needs ${creditsForGeneration()}, you have ${billing.credits}). Upgrade or wait for renewal.`, code: "out_of_credits" }, { status: 402 });
+    }
+
+    if (!process.env.ARK_API_KEY) {
+      return NextResponse.json({ error: "Video generation isn't configured on this deployment (missing ARK_API_KEY)." }, { status: 500 });
+    }
+
     const { prompt, durationSec, resolution, aspectRatio } = await req.json();
     if (typeof prompt !== "string" || !prompt.trim()) {
       return NextResponse.json({ error: "prompt is required" }, { status: 400 });

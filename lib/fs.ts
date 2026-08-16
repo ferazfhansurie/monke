@@ -2,9 +2,12 @@
 
 import type { MediaItem, MediaKind } from "./types";
 
-const VIDEO_EXT = [".mp4", ".mov", ".webm", ".mkv", ".m4v"];
-const AUDIO_EXT = [".mp3", ".wav", ".m4a", ".aac", ".ogg"];
-const IMAGE_EXT = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
+// Deliberately generous — an unrecognized extension used to mean a file
+// got silently dropped with zero feedback (see kindForFile below for the
+// second-layer fallback on top of this list).
+const VIDEO_EXT = [".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi", ".flv", ".mpeg", ".mpg", ".3gp", ".ts"];
+const AUDIO_EXT = [".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".wma", ".aiff", ".aif", ".opus", ".weba", ".oga", ".mp2"];
+const IMAGE_EXT = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg", ".tiff", ".tif", ".heic", ".heif"];
 
 export function isFileSystemAccessSupported(): boolean {
   return typeof window !== "undefined" && "showDirectoryPicker" in window;
@@ -16,6 +19,27 @@ export function kindForName(name: string): MediaKind | null {
   if (AUDIO_EXT.some((ext) => lower.endsWith(ext))) return "audio";
   if (IMAGE_EXT.some((ext) => lower.endsWith(ext))) return "image";
   return null;
+}
+
+// Fallback for a file whose extension isn't in our curated lists above —
+// trusts the browser/OS's own MIME sniffing instead of giving up. Catches
+// real-world audio/video formats we didn't think to list explicitly.
+export function kindForMimeType(mimeType: string): MediaKind | null {
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType.startsWith("image/")) return "image";
+  return null;
+}
+
+// Combines both checks and reports which one matched — used so callers can
+// surface a clear reason when a file is skipped instead of silently
+// dropping it (extension not recognized AND browser couldn't identify a
+// MIME type either — genuinely not media, not a bug).
+export async function kindForHandle(handle: FileSystemFileHandle): Promise<MediaKind | null> {
+  const byName = kindForName(handle.name);
+  if (byName) return byName;
+  const file = await handle.getFile();
+  return kindForMimeType(file.type);
 }
 
 // Opens the native folder picker and returns every recognized media file in
@@ -32,9 +56,10 @@ export async function openProjectFolder(): Promise<FileSystemDirectoryHandle> {
 // like a folder's contents. Only the <input> fallback path (browsers
 // without FSA) is truly unable to survive a reload — anything picked this
 // way should persist like folder-scanned media does.
-export async function pickFiles(): Promise<{ handle: FileSystemFileHandle; kind: MediaKind }[]> {
+export async function pickFiles(): Promise<{ items: { handle: FileSystemFileHandle; kind: MediaKind }[]; skipped: string[] }> {
   const handles = await window.showOpenFilePicker({
     multiple: true,
+    excludeAcceptAllOption: false, // keep "All Files" selectable — the accept filter below is a default view, not a hard restriction
     types: [
       {
         description: "Media",
@@ -46,12 +71,14 @@ export async function pickFiles(): Promise<{ handle: FileSystemFileHandle; kind:
       },
     ],
   });
-  const out: { handle: FileSystemFileHandle; kind: MediaKind }[] = [];
+  const items: { handle: FileSystemFileHandle; kind: MediaKind }[] = [];
+  const skipped: string[] = [];
   for (const handle of handles) {
-    const kind = kindForName(handle.name);
-    if (kind) out.push({ handle, kind });
+    const kind = await kindForHandle(handle);
+    if (kind) items.push({ handle, kind });
+    else skipped.push(handle.name);
   }
-  return out;
+  return { items, skipped };
 }
 
 export async function listMediaHandles(
