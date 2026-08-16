@@ -12,10 +12,23 @@ let pipelinePromise: Promise<unknown> | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getAsrPipeline(): Promise<any> {
   if (!pipelinePromise) {
+    // fp32, not a quantized dtype: whisper-base's decoder embedding layer
+    // ships 4-bit block-quantized (MatMulNBits) even under the "q8" preset,
+    // and ONNX Runtime Web's WASM backend has a broken Transpose+Dequantize
+    // fusion pass for that op ("TransposeDQWeightsForMatMulNBits Missing
+    // required scale") — it fails to initialize every time, not just
+    // intermittently. fp32 skips quantized ops entirely at the cost of a
+    // larger download (~290MB vs ~140MB) and modestly slower inference.
     pipelinePromise = (async () => {
       const { pipeline } = await import("@huggingface/transformers");
-      return pipeline("automatic-speech-recognition", "Xenova/whisper-base", { dtype: "q8" });
-    })();
+      return pipeline("automatic-speech-recognition", "Xenova/whisper-base", { dtype: "fp32" });
+    })().catch((err) => {
+      // Don't let a failed load poison every future attempt — clear the
+      // cache so the next transcribe call gets a fresh try instead of
+      // permanently re-throwing this same rejected promise.
+      pipelinePromise = null;
+      throw err;
+    });
   }
   return pipelinePromise;
 }
