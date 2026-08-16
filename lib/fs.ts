@@ -84,17 +84,21 @@ async function probeImage(url: string): Promise<{ width: number; height: number 
   });
 }
 
-// Captures a single still frame as a downscaled JPEG data URL — the only
+// Captures a burst of still frames as downscaled JPEG data URLs — the only
 // way the AI can "see" footage content, since media is never uploaded.
+// Opens one video element and seeks it repeatedly (seeks are sequential —
+// a video element can only be at one currentTime at a time) rather than
+// one throwaway element per frame, so a dense burst (e.g. every 0.05s)
+// doesn't reload/redecode the source N times.
 // Reads the file fresh from the handle rather than reusing item.objectUrl
 // so this works even if that URL was already revoked.
-export async function captureFrame(item: MediaItem, atSeconds = 0): Promise<string> {
+export async function captureFrames(item: MediaItem, atSecondsList: number[]): Promise<string[]> {
   const file = await item.handle.getFile();
   const url = URL.createObjectURL(file);
-  const MAX_DIM = 768;
+  const MAX_DIM = 640;
   try {
     if (item.kind === "image") {
-      return await new Promise<string>((resolve, reject) => {
+      const frame = await new Promise<string>((resolve, reject) => {
         const img = new Image();
         img.onload = () => {
           const scale = Math.min(1, MAX_DIM / Math.max(img.naturalWidth, img.naturalHeight));
@@ -109,28 +113,43 @@ export async function captureFrame(item: MediaItem, atSeconds = 0): Promise<stri
         img.onerror = () => reject(new Error("Couldn't read image"));
         img.src = url;
       });
+      return atSecondsList.map(() => frame);
     }
-    return await new Promise<string>((resolve, reject) => {
-      const v = document.createElement("video");
-      v.preload = "auto";
-      v.muted = true;
-      v.playsInline = true;
-      v.src = url;
-      v.onloadedmetadata = () => {
-        v.currentTime = Math.min(Math.max(0, atSeconds), Math.max(0, v.duration - 0.05));
-      };
-      v.onseeked = () => {
-        const scale = Math.min(1, MAX_DIM / Math.max(v.videoWidth, v.videoHeight));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(v.videoWidth * scale));
-        canvas.height = Math.max(1, Math.round(v.videoHeight * scale));
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return reject(new Error("Canvas unavailable"));
-        ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.7));
-      };
-      v.onerror = () => reject(new Error("Couldn't read frame"));
+
+    const v = document.createElement("video");
+    v.preload = "auto";
+    v.muted = true;
+    v.playsInline = true;
+    v.src = url;
+    await new Promise<void>((resolve, reject) => {
+      v.onloadedmetadata = () => resolve();
+      v.onerror = () => reject(new Error("Couldn't read video"));
     });
+
+    const scale = Math.min(1, MAX_DIM / Math.max(v.videoWidth, v.videoHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(v.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(v.videoHeight * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas unavailable");
+
+    const frames: string[] = [];
+    for (const t of atSecondsList) {
+      const clamped = Math.min(Math.max(0, t), Math.max(0, v.duration - 0.02));
+      await new Promise<void>((resolve, reject) => {
+        const onSeeked = () => {
+          v.removeEventListener("seeked", onSeeked);
+          resolve();
+        };
+        const onErr = () => reject(new Error("Seek failed"));
+        v.addEventListener("seeked", onSeeked);
+        v.addEventListener("error", onErr, { once: true });
+        v.currentTime = clamped;
+      });
+      ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+      frames.push(canvas.toDataURL("image/jpeg", 0.6));
+    }
+    return frames;
   } finally {
     URL.revokeObjectURL(url);
   }

@@ -50,10 +50,11 @@ export interface ChatMessagePart {
   content?: string;
   toolUseId?: string;
   isError?: boolean;
-  // A still frame captured client-side (data: URL) and attached to a
-  // tool_result — how the agent "sees" footage without any file leaving
-  // the browser except this one derived frame, sent straight to Anthropic.
-  imageDataUrl?: string;
+  // One or more still frames (data: URLs) captured client-side and
+  // attached to a tool_result — how the agent "sees" footage without any
+  // file leaving the browser except these derived frames, sent straight
+  // to Anthropic. Can be a dense burst (e.g. every 0.05s) for motion.
+  imageDataUrls?: string[];
 }
 
 export interface ChatMessage {

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Sparkles, Film, Captions, Mic, Music, FolderTree, Send, Plus, History, Loader2, ChevronDown, Check } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { CHAT_MODELS } from "@/lib/models";
-import { captureFrame } from "@/lib/fs";
+import { captureFrames } from "@/lib/fs";
 import type { ChatMessage, ChatMessagePart } from "@/lib/types";
 
 const STARTERS = [
@@ -38,15 +38,17 @@ function toAnthropicMessages(messages: ChatMessage[]): Array<{ role: "user" | "a
     content: m.parts.map((p) => {
       if (p.type === "text") return { type: "text", text: p.text ?? "" };
       if (p.type === "tool_use") return { type: "tool_use", id: p.toolUseId, name: p.name, input: p.input ?? {} };
-      if (p.type === "tool_result" && p.imageDataUrl) {
-        const match = /^data:([^;]+);base64,(.+)$/.exec(p.imageDataUrl);
+      if (p.type === "tool_result" && p.imageDataUrls && p.imageDataUrls.length > 0) {
         return {
           type: "tool_result",
           tool_use_id: p.toolUseId,
           is_error: p.isError || undefined,
           content: [
             { type: "text", text: p.content ?? "" },
-            { type: "image", source: { type: "base64", media_type: match?.[1] ?? "image/jpeg", data: match?.[2] ?? "" } },
+            ...p.imageDataUrls.map((dataUrl) => {
+              const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
+              return { type: "image", source: { type: "base64", media_type: match?.[1] ?? "image/jpeg", data: match?.[2] ?? "" } };
+            }),
           ],
         };
       }
@@ -77,7 +79,7 @@ function buildTimelineContext(): string {
 interface ToolResult {
   ok: boolean;
   message: string;
-  imageDataUrl?: string;
+  imageDataUrls?: string[];
 }
 
 async function dispatchTool(name: string, input: Record<string, unknown>): Promise<ToolResult> {
@@ -86,31 +88,52 @@ async function dispatchTool(name: string, input: Record<string, unknown>): Promi
     if (name === "timeline_probe_clip") {
       const clipId = str(input, "clip_id");
       const mediaIdInput = str(input, "media_id");
+      const frameCount = Math.min(12, Math.max(1, Math.round(num(input, "frame_count") ?? 6)));
+      const stepSeconds = Math.min(2, Math.max(0.05, num(input, "step_seconds") ?? 0.05));
+      const windowSec = (frameCount - 1) * stepSeconds;
+
       let item: (typeof store.items)[number] | undefined;
-      let atSeconds = 0;
+      let rangeStart = 0;
+      let rangeEnd = 0;
+      let startAt = 0;
       let label = "";
       if (clipId) {
         const clip = store.timeline.clips.find((c) => c.id === clipId);
         if (!clip) return { ok: false, message: `No timeline clip with id "${clipId}".` };
         item = store.items.find((i) => i.id === clip.mediaId);
         if (!item) return { ok: false, message: "That clip's source media isn't in the library." };
-        const dur = Math.max(0, clip.trimOut - clip.trimIn);
-        const offset = num(input, "at_seconds") ?? dur / 2;
-        atSeconds = clip.trimIn + Math.min(Math.max(0, offset), dur);
-        label = `clip ${clipId} at ${offset.toFixed(1)}s into its trimmed range`;
+        rangeStart = clip.trimIn;
+        rangeEnd = clip.trimOut;
+        const dur = Math.max(0, rangeEnd - rangeStart);
+        const requested = num(input, "at_seconds") ?? Math.max(0, dur / 2 - windowSec / 2);
+        startAt = rangeStart + Math.min(Math.max(0, requested), Math.max(0, dur - windowSec));
+        label = `clip ${clipId}`;
       } else if (mediaIdInput) {
         item = store.items.find((i) => i.id === mediaIdInput);
         if (!item) return { ok: false, message: `No library item with id "${mediaIdInput}".` };
-        atSeconds = num(input, "at_seconds") ?? (item.durationSec ?? 0) / 2;
-        label = `media ${mediaIdInput} at ${atSeconds.toFixed(1)}s`;
+        rangeStart = 0;
+        rangeEnd = item.durationSec ?? windowSec;
+        const dur = Math.max(0, rangeEnd - rangeStart);
+        const requested = num(input, "at_seconds") ?? Math.max(0, dur / 2 - windowSec / 2);
+        startAt = Math.min(Math.max(0, requested), Math.max(0, dur - windowSec));
+        label = `media ${mediaIdInput}`;
       } else {
         return { ok: false, message: "Provide either clip_id or media_id." };
       }
       if (item.kind !== "video" && item.kind !== "image") {
         return { ok: false, message: `"${item.name}" is ${item.kind}, not video or image — nothing to see.` };
       }
-      const imageDataUrl = await captureFrame(item, atSeconds);
-      return { ok: true, message: `Captured a frame from ${label} ("${item.name}").`, imageDataUrl };
+      if (item.kind === "image") {
+        const imageDataUrls = await captureFrames(item, [0]);
+        return { ok: true, message: `Captured "${item.name}" (a single still image, no motion to sample).`, imageDataUrls };
+      }
+      const times = Array.from({ length: frameCount }, (_, i) => startAt + i * stepSeconds);
+      const imageDataUrls = await captureFrames(item, times);
+      return {
+        ok: true,
+        message: `Captured ${frameCount} frames from ${label} ("${item.name}"), ${startAt.toFixed(2)}s-${(startAt + windowSec).toFixed(2)}s at ${stepSeconds}s spacing.`,
+        imageDataUrls,
+      };
     }
     if (name === "timeline_add_clip") {
       const mediaId = str(input, "media_id");
@@ -212,7 +235,7 @@ export function ChatPanel() {
         const resultParts: ChatMessagePart[] = await Promise.all(
           toolUses.map(async (tu) => {
             const result = await dispatchTool(tu.name!, tu.input || {});
-            return { type: "tool_result" as const, toolUseId: tu.id, content: result.message, isError: !result.ok, imageDataUrl: result.imageDataUrl };
+            return { type: "tool_result" as const, toolUseId: tu.id, content: result.message, isError: !result.ok, imageDataUrls: result.imageDataUrls };
           })
         );
         const resultMsg = pushMessage("user", resultParts);
@@ -290,9 +313,13 @@ export function ChatPanel() {
                       ) : (
                         <div className="flex flex-col gap-1.5">
                           <span className={p.isError ? "text-red-400/80" : ""}>{p.content}</span>
-                          {p.imageDataUrl && (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={p.imageDataUrl} alt="Captured frame" className="max-h-32 rounded border border-white/10 object-contain" />
+                          {p.imageDataUrls && p.imageDataUrls.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {p.imageDataUrls.map((src, j) => (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img key={j} src={src} alt="Captured frame" className="h-14 w-auto rounded border border-white/10 object-contain" />
+                              ))}
+                            </div>
                           )}
                         </div>
                       )}

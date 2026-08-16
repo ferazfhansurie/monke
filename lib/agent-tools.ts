@@ -80,7 +80,7 @@ export const AGENT_TOOLS: AgentTool[] = [
   {
     name: "timeline_probe_clip",
     description:
-      "Capture and view a single still frame from a clip or library item — this is your ONLY way to see what footage actually shows. Provide clip_id (samples within that timeline clip's trimmed range) or media_id (samples the raw source). Call it more than once at different at_seconds to sample multiple moments before describing a clip's content, since one frame rarely tells the whole story.",
+      "Capture and view still frames from a clip or library item — this is your ONLY way to see what footage actually shows. Provide clip_id (samples within that timeline clip's trimmed range) or media_id (samples the raw source). By default captures a BURST of consecutive frames at true frame-level spacing (as fine as 0.05s) starting at at_seconds, so you can see motion, not just one static instant. A burst only covers a short window (frame_count * step_seconds) — call the tool again with a later at_seconds to sweep across the rest of a longer clip.",
     input_schema: {
       type: "object",
       properties: {
@@ -89,7 +89,15 @@ export const AGENT_TOOLS: AgentTool[] = [
         at_seconds: {
           type: "number",
           description:
-            "Offset in seconds to sample. For clip_id this is relative to the clip's own trimmed range (0 = the clip's in-point). For media_id it's relative to the raw source. Defaults to the midpoint.",
+            "Start offset in seconds for the burst. For clip_id this is relative to the clip's own trimmed range (0 = the clip's in-point). For media_id it's relative to the raw source. Defaults to the midpoint minus half the burst window.",
+        },
+        frame_count: {
+          type: "number",
+          description: "How many consecutive frames to capture in this burst. 1-12, default 6.",
+        },
+        step_seconds: {
+          type: "number",
+          description: "Spacing between consecutive frames in the burst, in seconds. 0.05-2, default 0.05 (near frame-accurate at 20fps+).",
         },
       },
     },
