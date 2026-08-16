@@ -20,6 +20,16 @@ const STARTERS = [
 ];
 
 const MAX_TURNS = 12;
+// Generous enough to cover a first-time Whisper model download (~290MB,
+// can be slow on a bad connection) without false-triggering on ordinary
+// tool calls, while still guaranteeing no single tool dispatch (frame
+// capture waiting on a stuck video 'seeked' event, a hung network call)
+// can leave the whole chat panel stuck "loading" forever with no way out.
+const TOOL_TIMEOUT_MS = 90000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([promise, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(message)), ms))]);
+}
 
 function relativeTime(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -451,6 +461,7 @@ export function ChatPanel() {
   const queueRef = useRef<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const stoppedByUserRef = useRef(false);
+  const timedOutRef = useRef(false);
   const messageListRef = useRef<HTMLDivElement>(null);
 
   // A silently-stopped conversation (no error, no visible reply) reads as
@@ -496,22 +507,39 @@ export function ChatPanel() {
     pushMessage("user", [{ type: "text", text }]);
     setLoading(true);
     stoppedByUserRef.current = false;
+    timedOutRef.current = false;
     const controller = new AbortController();
     abortRef.current = controller;
 
     let finishedNaturally = false;
     try {
       for (let turn = 0; turn < MAX_TURNS; turn++) {
-        const res = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: controller.signal,
-          body: JSON.stringify({
-            messages: toAnthropicMessages(history, Math.max(0, history.length - 4)),
-            timelineContext: buildTimelineContext(),
-            model: chatModel,
-          }),
-        });
+        // The chat route has a 60s server-side budget (maxDuration) — if a
+        // request ever hangs past that without a clean response (a network
+        // drop, a platform-level timeout page instead of JSON, or anything
+        // else that doesn't cleanly reject the fetch), this forces it to
+        // actually end instead of leaving `loading` stuck true forever,
+        // which disables New Chat/queuing and makes the whole panel look
+        // frozen with no visible error.
+        const perTurnTimeout = setTimeout(() => {
+          timedOutRef.current = true;
+          controller.abort();
+        }, 58000);
+        let res: Response;
+        try {
+          res = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: controller.signal,
+            body: JSON.stringify({
+              messages: toAnthropicMessages(history, Math.max(0, history.length - 4)),
+              timelineContext: buildTimelineContext(),
+              model: chatModel,
+            }),
+          });
+        } finally {
+          clearTimeout(perTurnTimeout);
+        }
         const data = await res.json();
         if (!res.ok) {
           pushMessage("assistant", [{ type: "text", text: `Error: ${data.error || "Request failed"}` }]);
@@ -552,7 +580,11 @@ export function ChatPanel() {
 
         const resultParts: ChatMessagePart[] = await Promise.all(
           toolUses.map(async (tu) => {
-            const result = await dispatchTool(tu.name!, tu.input || {});
+            const result = await withTimeout(
+              dispatchTool(tu.name!, tu.input || {}),
+              TOOL_TIMEOUT_MS,
+              `${tu.name} took too long and timed out.`
+            ).catch((err): ToolResult => ({ ok: false, message: err instanceof Error ? err.message : "Tool call timed out" }));
             return { type: "tool_result" as const, toolUseId: tu.id, content: result.message, isError: !result.ok, imageDataUrls: result.imageDataUrls };
           })
         );
@@ -569,7 +601,12 @@ export function ChatPanel() {
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
-        pushMessage("assistant", [{ type: "text", text: stoppedByUserRef.current ? "_Stopped._" : "_Cancelled._" }]);
+        const text = timedOutRef.current
+          ? "_Timed out waiting for a response — try again, or ask something shorter._"
+          : stoppedByUserRef.current
+            ? "_Stopped._"
+            : "_Cancelled._";
+        pushMessage("assistant", [{ type: "text", text }]);
       } else {
         pushMessage("assistant", [{ type: "text", text: `Error: ${err instanceof Error ? err.message : "Something went wrong"}` }]);
       }
