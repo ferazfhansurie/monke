@@ -4,6 +4,7 @@ import { create } from "zustand";
 import type { MediaItem, Timeline, TimelineClip, ProjectSettings, ChatMessage, AuthUser } from "./types";
 import { DEFAULT_CHAT_MODEL } from "./models";
 import { listMediaHandles, buildMediaItem } from "./fs";
+import { DEFAULT_PIP_RECT } from "./layer-style";
 import { saveProjectToDb, loadAllProjectsFromDb, getPersistedActiveProjectId, setPersistedActiveProjectId, type PersistedProject } from "./idb";
 
 // A Project bundles everything that should switch together — library,
@@ -66,6 +67,7 @@ interface MonkeState {
   loadProgress: { done: number; total: number } | null;
   items: MediaItem[];
   selectedItemId: string | null;
+  selectedClipId: string | null;
   timeline: Timeline;
   playheadSec: number;
   isPlaying: boolean;
@@ -96,8 +98,24 @@ interface MonkeState {
   addItem: (item: MediaItem) => void;
   removeItem: (id: string) => void;
   selectItem: (id: string | null) => void;
-  addTimelineClip: (mediaId: string, opts?: { trimIn?: number; trimOut?: number; order?: number }) => string;
-  updateTimelineClip: (clipId: string, patch: Partial<Pick<TimelineClip, "trimIn" | "trimOut" | "order">>) => void;
+  selectClip: (id: string | null) => void;
+  addTimelineClip: (
+    mediaId: string,
+    opts?: {
+      trimIn?: number;
+      trimOut?: number;
+      order?: number;
+      trackIndex?: number;
+      timelineStart?: number;
+      position?: TimelineClip["position"];
+      opacity?: number;
+      mask?: TimelineClip["mask"];
+    }
+  ) => string;
+  updateTimelineClip: (
+    clipId: string,
+    patch: Partial<Pick<TimelineClip, "trimIn" | "trimOut" | "order" | "trackIndex" | "timelineStart" | "position" | "opacity" | "mask">>
+  ) => void;
   removeTimelineClip: (clipId: string) => void;
   reorderTimelineClip: (clipId: string, order: number) => void;
   splitTimelineClip: (clipId: string, atSeconds: number) => string | null;
@@ -154,6 +172,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   loadProgress: null,
   items: [],
   selectedItemId: null,
+  selectedClipId: null,
   timeline: initialProject.timeline,
   playheadSec: 0,
   isPlaying: false,
@@ -189,22 +208,36 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       };
     }),
   selectItem: (id) => set({ selectedItemId: id }),
+  selectClip: (id) => set({ selectedClipId: id }),
 
   addTimelineClip: (mediaId, opts) => {
     const clipId = `clip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     set((s) => {
       const clips = s.timeline.clips;
-      const maxOrder = clips.reduce((m, c) => Math.max(m, c.order), -1);
+      const trackIndex = opts?.trackIndex ?? 0;
       const item = get().items.find((i) => i.id === mediaId);
       const trimIn = opts?.trimIn ?? 0;
       const trimOut = opts?.trimOut ?? item?.durationSec ?? trimIn + 5;
-      const newClip: TimelineClip = {
-        id: clipId,
-        mediaId,
-        trimIn,
-        trimOut,
-        order: opts?.order ?? maxOrder + 1,
-      };
+      let newClip: TimelineClip;
+      if (trackIndex === 0) {
+        // Base track: sequential, ordered — same behavior as before layering existed.
+        const maxOrder = clips.filter((c) => (c.trackIndex ?? 0) === 0).reduce((m, c) => Math.max(m, c.order), -1);
+        newClip = { id: clipId, mediaId, trimIn, trimOut, order: opts?.order ?? maxOrder + 1, trackIndex: 0 };
+      } else {
+        // Overlay track: floats at an explicit timeline position, independent of base-track sequencing.
+        newClip = {
+          id: clipId,
+          mediaId,
+          trimIn,
+          trimOut,
+          order: 0,
+          trackIndex,
+          timelineStart: Math.max(0, opts?.timelineStart ?? 0),
+          position: opts?.position ?? DEFAULT_PIP_RECT,
+          opacity: opts?.opacity,
+          mask: opts?.mask,
+        };
+      }
       return {
         timelineUndoStack: [...s.timelineUndoStack.slice(-49), clips],
         timelineRedoStack: [],
@@ -385,6 +418,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         folderHandle: fresh.folderHandle,
         items: fresh.items,
         selectedItemId: null,
+        selectedClipId: null,
         timeline: fresh.timeline,
         settings: fresh.settings,
         messages: fresh.messages,
@@ -411,6 +445,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         folderHandle: target.folderHandle,
         items: target.items,
         selectedItemId: null,
+        selectedClipId: null,
         timeline: target.timeline,
         settings: target.settings,
         messages: target.messages,
@@ -432,6 +467,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       folderHandle: null,
       items: [],
       selectedItemId: null,
+      selectedClipId: null,
       timeline: { id: "tl_1", name: "Timeline 1", clips: [] },
       playheadSec: 0,
       isPlaying: false,

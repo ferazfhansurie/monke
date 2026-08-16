@@ -21,12 +21,42 @@ export interface MediaItem {
   addedAt: string;
 }
 
+// Where a clip renders within the frame — fractions (0-1) of the project's
+// resolution, not pixels, so it's independent of resolution/aspect changes.
+export interface ClipRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+// Crops a clip's rendered box. Insets are fractions (0-1) of the clip's OWN
+// box (not the whole frame) — 0 means no crop on that edge.
+export interface ClipMask {
+  shape: "rect" | "ellipse";
+  insetTop: number;
+  insetRight: number;
+  insetBottom: number;
+  insetLeft: number;
+}
+
 export interface TimelineClip {
   id: string;
   mediaId: string; // references MediaItem.id — media is never duplicated
   trimIn: number; // seconds into the source
   trimOut: number; // seconds into the source
-  order: number; // position in the single track (v1); float, sparse
+  order: number; // sequencing WITHIN track 0 (base track); unused/ignored for trackIndex > 0
+  // trackIndex 0 = the base track: clips play back-to-back, sequenced by
+  // `order`, and define the timeline's overall duration. trackIndex > 0 =
+  // an overlay track: the clip floats at an explicit `timelineStart` on the
+  // master clock, independent of base-track sequencing, and renders on top
+  // (higher trackIndex = higher z-order). Omitted = 0, for clips created
+  // before layering existed.
+  trackIndex?: number;
+  timelineStart?: number; // seconds on the master timeline — REQUIRED for trackIndex > 0
+  position?: ClipRect; // defaults to full-frame {x:0,y:0,width:1,height:1} when unset
+  opacity?: number; // 0-1, defaults to 1
+  mask?: ClipMask;
 }
 
 export interface Timeline {

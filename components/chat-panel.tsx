@@ -7,7 +7,7 @@ import { CHAT_MODELS } from "@/lib/models";
 import { captureFrames } from "@/lib/fs";
 import { transcribeAudio } from "@/lib/audio";
 import { Markdown } from "./markdown";
-import type { ChatMessage, ChatMessagePart } from "@/lib/types";
+import type { ChatMessage, ChatMessagePart, ClipMask, ClipRect } from "@/lib/types";
 
 const STARTERS = [
   { icon: Sparkles, label: "Analyse my clips" },
@@ -29,6 +29,31 @@ function str(input: Record<string, unknown>, key: string): string | undefined {
 function num(input: Record<string, unknown>, key: string): number | undefined {
   const v = input[key];
   return typeof v === "number" ? v : undefined;
+}
+function parsePosition(input: Record<string, unknown>, key: string): ClipRect | undefined {
+  const v = input[key];
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const x = num(o, "x"),
+    y = num(o, "y"),
+    width = num(o, "width"),
+    height = num(o, "height");
+  if (x == null || y == null || width == null || height == null) return undefined;
+  return { x, y, width, height };
+}
+function parseMask(input: Record<string, unknown>, key: string): ClipMask | undefined {
+  const v = input[key];
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const shape = str(o, "shape");
+  if (shape !== "rect" && shape !== "ellipse") return undefined;
+  return {
+    shape,
+    insetTop: num(o, "inset_top") ?? 0,
+    insetRight: num(o, "inset_right") ?? 0,
+    insetBottom: num(o, "inset_bottom") ?? 0,
+    insetLeft: num(o, "inset_left") ?? 0,
+  };
 }
 
 // Converts the store's display-oriented ChatMessage[] into the Anthropic
@@ -218,8 +243,17 @@ async function dispatchTool(name: string, input: Record<string, unknown>): Promi
       const trimIn = num(input, "trim_in");
       const trimOut = num(input, "trim_out");
       const order = num(input, "order");
-      const clipId = store.addTimelineClip(mediaId, { trimIn, trimOut, order });
-      return { ok: true, message: `Added clip ${clipId} ("${item.name}") to the timeline.` };
+      const trackIndex = num(input, "track_index");
+      const timelineStart = num(input, "timeline_start");
+      if ((trackIndex ?? 0) > 0 && timelineStart == null) {
+        return { ok: false, message: "timeline_start is required when track_index >= 1 (overlay clips need an explicit position on the master timeline)." };
+      }
+      const position = parsePosition(input, "position");
+      const opacity = num(input, "opacity");
+      const mask = parseMask(input, "mask");
+      const clipId = store.addTimelineClip(mediaId, { trimIn, trimOut, order, trackIndex, timelineStart, position, opacity, mask });
+      const layerNote = (trackIndex ?? 0) > 0 ? ` as an overlay on track ${trackIndex}, starting at ${timelineStart}s` : "";
+      return { ok: true, message: `Added clip ${clipId} ("${item.name}") to the timeline${layerNote}.` };
     }
     if (name === "timeline_trim_clip") {
       const clipId = str(input, "clip_id");
@@ -228,7 +262,23 @@ async function dispatchTool(name: string, input: Record<string, unknown>): Promi
       const trimIn = num(input, "trim_in") ?? clip.trimIn;
       const trimOut = num(input, "trim_out") ?? clip.trimOut;
       if (trimIn >= trimOut) return { ok: false, message: "trim_in must be less than trim_out." };
-      store.updateTimelineClip(clip.id, { trimIn, trimOut });
+      const trackIndex = num(input, "track_index");
+      const timelineStart = num(input, "timeline_start");
+      if ((trackIndex ?? clip.trackIndex ?? 0) > 0 && timelineStart == null && clip.timelineStart == null) {
+        return { ok: false, message: "timeline_start is required when moving a clip to track_index >= 1." };
+      }
+      const position = parsePosition(input, "position");
+      const opacity = num(input, "opacity");
+      const mask = parseMask(input, "mask");
+      store.updateTimelineClip(clip.id, {
+        trimIn,
+        trimOut,
+        ...(trackIndex != null ? { trackIndex } : {}),
+        ...(timelineStart != null ? { timelineStart } : {}),
+        ...(position ? { position } : {}),
+        ...(opacity != null ? { opacity } : {}),
+        ...(mask ? { mask } : {}),
+      });
       return { ok: true, message: `Clip ${clip.id} trimmed to ${trimIn.toFixed(1)}s-${trimOut.toFixed(1)}s.` };
     }
     if (name === "timeline_reorder_clip") {

@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
+import { FULL_FRAME, DEFAULT_PIP_RECT } from "@/lib/layer-style";
+import type { ClipMask, ClipRect } from "@/lib/types";
 
 const ASPECT_PRESETS: Record<string, { w: number; h: number }> = {
   "9:16": { w: 1080, h: 1920 },
@@ -17,6 +19,17 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="text-[11px] text-gray-500">{label}</span>
       {children}
     </div>
+  );
+}
+
+function PctInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  return (
+    <input
+      type="number"
+      value={Math.round(value * 100)}
+      onChange={(e) => onChange(Math.max(0, Math.min(100, Number(e.target.value) || 0)) / 100)}
+      className="w-14 rounded bg-white/5 px-1.5 py-0.5 text-right text-[11px] text-gray-300 outline-none"
+    />
   );
 }
 
@@ -43,8 +56,14 @@ export function InspectorPanel() {
   const settings = useMonkeStore((s) => s.settings);
   const setSettings = useMonkeStore((s) => s.setSettings);
   const timeline = useMonkeStore((s) => s.timeline);
+  const items = useMonkeStore((s) => s.items);
+  const selectedClipId = useMonkeStore((s) => s.selectedClipId);
+  const updateTimelineClip = useMonkeStore((s) => s.updateTimelineClip);
 
   const durationSec = timeline.clips.reduce((sum, c) => sum + Math.max(0, c.trimOut - c.trimIn), 0);
+  const selectedClip = timeline.clips.find((c) => c.id === selectedClipId);
+  const selectedItem = selectedClip ? items.find((i) => i.id === selectedClip.mediaId) : undefined;
+  const position: ClipRect = selectedClip?.position ?? FULL_FRAME;
 
   return (
     <div className="flex h-full flex-col overflow-y-auto border-l border-white/10 bg-[#0d1117] text-gray-300">
@@ -96,6 +115,99 @@ export function InspectorPanel() {
           </select>
         </Field>
       </Section>
+
+      {selectedClip && (
+        <Section title="Layer & Mask">
+          <Field label="Clip">
+            <span className="max-w-[140px] truncate text-[11px] text-gray-300">{selectedItem?.name ?? selectedClip.mediaId}</span>
+          </Field>
+          <Field label="Track">
+            <input
+              type="number"
+              min={0}
+              value={selectedClip.trackIndex ?? 0}
+              onChange={(e) => {
+                const trackIndex = Math.max(0, Math.round(Number(e.target.value) || 0));
+                if (trackIndex === 0) {
+                  updateTimelineClip(selectedClip.id, { trackIndex, position: undefined, timelineStart: undefined, opacity: undefined, mask: undefined });
+                } else {
+                  updateTimelineClip(selectedClip.id, {
+                    trackIndex,
+                    timelineStart: selectedClip.timelineStart ?? 0,
+                    position: selectedClip.position ?? DEFAULT_PIP_RECT,
+                  });
+                }
+              }}
+              className="w-14 rounded bg-white/5 px-1.5 py-0.5 text-right text-[11px] text-gray-300 outline-none"
+            />
+          </Field>
+          {(selectedClip.trackIndex ?? 0) > 0 && (
+            <Field label="Starts at">
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  step={0.1}
+                  min={0}
+                  value={selectedClip.timelineStart ?? 0}
+                  onChange={(e) => updateTimelineClip(selectedClip.id, { timelineStart: Math.max(0, Number(e.target.value) || 0) })}
+                  className="w-16 rounded bg-white/5 px-1.5 py-0.5 text-right text-[11px] text-gray-300 outline-none"
+                />
+                <span className="text-[10px] text-gray-600">s</span>
+              </div>
+            </Field>
+          )}
+
+          <div className="py-1 text-[10px] font-medium text-gray-600">Position</div>
+          <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+            {(["x", "y", "width", "height"] as const).map((key) => (
+              <label key={key} className="flex items-center justify-between text-[10px] text-gray-500">
+                {key}
+                <PctInput value={position[key]} onChange={(v) => updateTimelineClip(selectedClip.id, { position: { ...position, [key]: v } })} />
+              </label>
+            ))}
+          </div>
+
+          <Field label="Opacity">
+            <PctInput value={selectedClip.opacity ?? 1} onChange={(v) => updateTimelineClip(selectedClip.id, { opacity: v })} />
+          </Field>
+
+          <div className="py-1 text-[10px] font-medium text-gray-600">Mask</div>
+          <Field label="Shape">
+            <select
+              value={selectedClip.mask?.shape ?? "none"}
+              onChange={(e) => {
+                const shape = e.target.value;
+                if (shape !== "rect" && shape !== "ellipse") {
+                  updateTimelineClip(selectedClip.id, { mask: undefined });
+                  return;
+                }
+                const m = selectedClip.mask;
+                updateTimelineClip(selectedClip.id, {
+                  mask: { shape, insetTop: m?.insetTop ?? 0, insetRight: m?.insetRight ?? 0, insetBottom: m?.insetBottom ?? 0, insetLeft: m?.insetLeft ?? 0 },
+                });
+              }}
+              className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-gray-300 outline-none"
+            >
+              <option value="none">None</option>
+              <option value="rect">Rectangle</option>
+              <option value="ellipse">Ellipse</option>
+            </select>
+          </Field>
+          {selectedClip.mask && (
+            <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+              {(["insetTop", "insetRight", "insetBottom", "insetLeft"] as const).map((key) => (
+                <label key={key} className="flex items-center justify-between text-[10px] text-gray-500">
+                  {key.replace("inset", "")}
+                  <PctInput
+                    value={(selectedClip.mask as ClipMask)[key]}
+                    onChange={(v) => updateTimelineClip(selectedClip.id, { mask: { ...(selectedClip.mask as ClipMask), [key]: v } })}
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+        </Section>
+      )}
 
       <Section title="Keyboard Shortcuts" defaultOpen={false}>
         {[

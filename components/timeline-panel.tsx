@@ -26,8 +26,9 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
   const timelineRedoStack = useMonkeStore((s) => s.timelineRedoStack);
   const undoTimeline = useMonkeStore((s) => s.undoTimeline);
   const redoTimeline = useMonkeStore((s) => s.redoTimeline);
+  const selectedClipId = useMonkeStore((s) => s.selectedClipId);
+  const setSelectedClipId = useMonkeStore((s) => s.selectClip);
 
-  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [dragging, setDragging] = useState<DragKind>(null);
   const [zoom, setZoom] = useState(1);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -58,7 +59,7 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
       const rect = trackRef.current?.getBoundingClientRect();
       if (!rect) return 0;
       const sec = Math.max(0, (clientX - rect.left) / pxPerSec);
-      const others = timeline.clips.filter((c) => c.id !== draggedClipId).sort((a, b) => a.order - b.order);
+      const others = timeline.clips.filter((c) => c.id !== draggedClipId && (c.trackIndex ?? 0) === 0).sort((a, b) => a.order - b.order);
       if (others.length === 0) return 0;
       let acc = 0;
       for (let i = 0; i < others.length; i++) {
@@ -109,24 +110,25 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
     dragClipIdRef.current = null;
   }, []);
 
-  const clips = [...timeline.clips].sort((a, b) => a.order - b.order);
+  const clips = timeline.clips.filter((c) => (c.trackIndex ?? 0) === 0).sort((a, b) => a.order - b.order);
+  const overlayClips = timeline.clips.filter((c) => (c.trackIndex ?? 0) > 0).sort((a, b) => (a.trackIndex ?? 0) - (b.trackIndex ?? 0));
 
   const splitAtPlayhead = useCallback(() => {
     if (!selectedClipId) return;
     const clip = timeline.clips.find((c) => c.id === selectedClipId);
-    if (!clip) return;
+    if (!clip || (clip.trackIndex ?? 0) !== 0) return; // splitting overlay clips isn't supported yet — base track only
     const startOffset = player.clips.find((c) => c.id === selectedClipId)?.startOffset ?? 0;
     const local = Math.max(0.05, player.currentTime - startOffset);
     const dur = clip.trimOut - clip.trimIn;
     const newId = splitTimelineClip(selectedClipId, Math.min(dur - 0.05, local));
     if (newId) setSelectedClipId(newId);
-  }, [selectedClipId, timeline.clips, player.clips, player.currentTime, splitTimelineClip]);
+  }, [selectedClipId, timeline.clips, player.clips, player.currentTime, splitTimelineClip, setSelectedClipId]);
 
   const deleteSelected = useCallback(() => {
     if (!selectedClipId) return;
     removeTimelineClip(selectedClipId);
     setSelectedClipId(null);
-  }, [selectedClipId, removeTimelineClip]);
+  }, [selectedClipId, removeTimelineClip, setSelectedClipId]);
 
   // Standard NLE shortcuts. Ignored while typing in any input/textarea
   // (chat box included) so "s" for split doesn't eat a keystroke there.
@@ -220,45 +222,75 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
         className="relative flex-1 overflow-x-auto overflow-y-hidden px-2 py-2 select-none"
         style={{ touchAction: "none" }}
       >
-        <div className="relative h-16" style={{ width: Math.max(600, player.totalDuration * pxPerSec + 100) }}>
-          {clips.length === 0 && (
-            <div className="flex h-full items-center justify-center rounded-md border border-dashed border-white/10 text-[11px] text-gray-600">
-              Double-click a clip in the library, or drag it here
+        <div className="relative flex flex-col gap-1" style={{ width: Math.max(600, player.totalDuration * pxPerSec + 100) }}>
+          {overlayClips.length > 0 && (
+            <div className="relative h-10 border-b border-white/5 pb-1">
+              {overlayClips.map((clip) => {
+                const duration = Math.max(0, clip.trimOut - clip.trimIn);
+                const left = (clip.timelineStart ?? 0) * pxPerSec;
+                const width = Math.max(20, duration * pxPerSec);
+                const item = items.find((i) => i.id === clip.mediaId);
+                const isSelected = selectedClipId === clip.id;
+                return (
+                  <div
+                    key={clip.id}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      setSelectedClipId(clip.id);
+                    }}
+                    className={`absolute top-0 bottom-0 overflow-hidden rounded-md border-2 bg-[#2a1f14] cursor-pointer ${
+                      isSelected ? "border-[#f26522]" : "border-white/15 hover:border-white/30"
+                    }`}
+                    style={{ left, width }}
+                    title={`${item?.name ?? "overlay"} — track ${clip.trackIndex}`}
+                  >
+                    <div className="truncate px-1.5 py-1 text-[9px] text-white/90">{item?.name || "overlay"}</div>
+                  </div>
+                );
+              })}
             </div>
           )}
-          {clips
-            .reduce<{ clip: (typeof clips)[number]; duration: number; startOffset: number }[]>((acc, clip) => {
-              const duration = Math.max(0, clip.trimOut - clip.trimIn);
-              const prevEnd = acc.length > 0 ? acc[acc.length - 1].startOffset + acc[acc.length - 1].duration : 0;
-              return [...acc, { clip, duration, startOffset: prevEnd }];
-            }, [])
-            .map(({ clip, duration, startOffset }) => {
-              const left = startOffset * pxPerSec;
-              const width = Math.max(24, duration * pxPerSec);
-              const item = items.find((i) => i.id === clip.mediaId);
-              const isSelected = selectedClipId === clip.id;
-              return (
-                <div
-                  key={clip.id}
-                  onPointerDown={onPointerDownClip(clip.id)}
-                  className={`absolute top-0 bottom-0 overflow-hidden rounded-md border-2 bg-[#1c2128] cursor-grab active:cursor-grabbing ${
-                    isSelected ? "border-[#f26522]" : "border-white/15 hover:border-white/30"
-                  }`}
-                  style={{ left, width }}
-                  title={item?.name}
-                >
-                  {item?.thumbnailUrl && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={item.thumbnailUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-40" />
-                  )}
-                  <div className="relative truncate px-1.5 py-1 text-[9px] text-white/90">{item?.name || "clip"}</div>
-                  <div data-handle="start" onPointerDown={beginTrimDrag(clip.id, "start")} className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#f26522]/60 hover:bg-[#f26522]" />
-                  <div data-handle="end" onPointerDown={beginTrimDrag(clip.id, "end")} className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#f26522]/60 hover:bg-[#f26522]" />
-                </div>
-              );
-            })}
 
-          {clips.length > 0 && (
+          <div className="relative h-16">
+            {clips.length === 0 && (
+              <div className="flex h-full items-center justify-center rounded-md border border-dashed border-white/10 text-[11px] text-gray-600">
+                Double-click a clip in the library, or drag it here
+              </div>
+            )}
+            {clips
+              .reduce<{ clip: (typeof clips)[number]; duration: number; startOffset: number }[]>((acc, clip) => {
+                const duration = Math.max(0, clip.trimOut - clip.trimIn);
+                const prevEnd = acc.length > 0 ? acc[acc.length - 1].startOffset + acc[acc.length - 1].duration : 0;
+                return [...acc, { clip, duration, startOffset: prevEnd }];
+              }, [])
+              .map(({ clip, duration, startOffset }) => {
+                const left = startOffset * pxPerSec;
+                const width = Math.max(24, duration * pxPerSec);
+                const item = items.find((i) => i.id === clip.mediaId);
+                const isSelected = selectedClipId === clip.id;
+                return (
+                  <div
+                    key={clip.id}
+                    onPointerDown={onPointerDownClip(clip.id)}
+                    className={`absolute top-0 bottom-0 overflow-hidden rounded-md border-2 bg-[#1c2128] cursor-grab active:cursor-grabbing ${
+                      isSelected ? "border-[#f26522]" : "border-white/15 hover:border-white/30"
+                    }`}
+                    style={{ left, width }}
+                    title={item?.name}
+                  >
+                    {item?.thumbnailUrl && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={item.thumbnailUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-40" />
+                    )}
+                    <div className="relative truncate px-1.5 py-1 text-[9px] text-white/90">{item?.name || "clip"}</div>
+                    <div data-handle="start" onPointerDown={beginTrimDrag(clip.id, "start")} className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#f26522]/60 hover:bg-[#f26522]" />
+                    <div data-handle="end" onPointerDown={beginTrimDrag(clip.id, "end")} className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#f26522]/60 hover:bg-[#f26522]" />
+                  </div>
+                );
+              })}
+          </div>
+
+          {(clips.length > 0 || overlayClips.length > 0) && (
             <div
               className="pointer-events-none absolute top-0 bottom-0 w-[2px] bg-white shadow-[0_0_6px_rgba(255,255,255,0.6)]"
               style={{ left: player.currentTime * pxPerSec }}

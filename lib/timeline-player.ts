@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useMonkeStore } from "./store";
-import type { Timeline } from "./types";
+import type { ClipMask, ClipRect, Timeline } from "./types";
 
 const DRIFT_CORRECTION_SEC = 0.15;
 
@@ -14,16 +14,36 @@ interface ResolvedClip {
   trimOut: number;
   startOffset: number;
   duration: number;
+  position?: ClipRect;
+  opacity?: number;
+  mask?: ClipMask;
 }
 
+// Only the base track (trackIndex 0, or unset for clips created before
+// layering existed) drives the master sequential clock — overlay tracks
+// (trackIndex > 0) float independently at their own timelineStart and are
+// composited separately by OverlayLayer, not part of this back-to-back sequence.
 function resolveClips(timeline: Timeline, srcForMedia: (mediaId: string) => string): ResolvedClip[] {
-  const sorted = [...timeline.clips].sort((a, b) => a.order - b.order);
+  const sorted = timeline.clips
+    .filter((c) => (c.trackIndex ?? 0) === 0)
+    .sort((a, b) => a.order - b.order);
   let offset = 0;
   const out: ResolvedClip[] = [];
   for (const c of sorted) {
     const duration = Math.max(0, c.trimOut - c.trimIn);
     if (duration <= 0) continue;
-    out.push({ id: c.id, mediaId: c.mediaId, src: srcForMedia(c.mediaId), trimIn: c.trimIn, trimOut: c.trimOut, startOffset: offset, duration });
+    out.push({
+      id: c.id,
+      mediaId: c.mediaId,
+      src: srcForMedia(c.mediaId),
+      trimIn: c.trimIn,
+      trimOut: c.trimOut,
+      startOffset: offset,
+      duration,
+      position: c.position,
+      opacity: c.opacity,
+      mask: c.mask,
+    });
     offset += duration;
   }
   return out;

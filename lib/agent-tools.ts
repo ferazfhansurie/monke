@@ -13,31 +13,72 @@ export interface AgentTool {
   };
 }
 
+// Shared schema fragments for layering/masking — used by both
+// timeline_add_clip (creating an overlay) and timeline_trim_clip (adjusting
+// one, or adding position/mask to an existing base-track clip).
+const POSITION_SCHEMA = {
+  type: "object",
+  description:
+    "Where this clip renders within the frame, as fractions of the project resolution (0-1), not pixels — resolution-independent. {x:0,y:0,width:1,height:1} is full-frame.",
+  properties: {
+    x: { type: "number", description: "Left edge, 0-1." },
+    y: { type: "number", description: "Top edge, 0-1." },
+    width: { type: "number", description: "Width, 0-1." },
+    height: { type: "number", description: "Height, 0-1." },
+  },
+  required: ["x", "y", "width", "height"],
+};
+
+const MASK_SCHEMA = {
+  type: "object",
+  description:
+    "Crops the clip's rendered box to a shape. Insets are fractions (0-1) of the CLIP'S OWN box (not the whole frame) — 0 means no crop on that edge. Equal insets on all sides with shape 'ellipse' gives a classic circular PiP bubble.",
+  properties: {
+    shape: { type: "string", enum: ["rect", "ellipse"] },
+    inset_top: { type: "number" },
+    inset_right: { type: "number" },
+    inset_bottom: { type: "number" },
+    inset_left: { type: "number" },
+  },
+  required: ["shape", "inset_top", "inset_right", "inset_bottom", "inset_left"],
+};
+
 export const AGENT_TOOLS: AgentTool[] = [
   {
     name: "timeline_add_clip",
     description:
-      "Add a video from the media library to the timeline as a new sequenced clip. Use the mediaId from the CURRENT LIBRARY list in context. Appends to the end by default.",
+      "Add a video from the media library to the timeline. Two modes: base-track (track_index 0 or omitted) appends a new sequenced clip to the end of the main cut, like a normal edit. Overlay (track_index >= 1) places a clip that floats independently at an explicit timeline_start, layered on top of the base track and any lower overlay tracks — use this for picture-in-picture, watermarks, or any 'two things visible at once' composite. Overlay clips default to a bottom-right PiP box if you don't specify position.",
     input_schema: {
       type: "object",
       properties: {
         media_id: { type: "string", description: "The library item id of the video to add." },
         trim_in: { type: "number", description: "Optional start offset in seconds. Defaults to 0." },
         trim_out: { type: "number", description: "Optional end offset in seconds. Defaults to the full source duration." },
-        order: { type: "number", description: "Optional position (0-based). Defaults to appended at the end." },
+        order: { type: "number", description: "Base-track only (track_index 0): optional position (0-based). Defaults to appended at the end." },
+        track_index: { type: "number", description: "0 = base track (default, sequential). 1+ = an overlay track, layered on top — higher draws over lower." },
+        timeline_start: { type: "number", description: "REQUIRED for track_index >= 1: when this overlay appears on the master timeline, in seconds." },
+        position: POSITION_SCHEMA,
+        opacity: { type: "number", description: "0-1, default 1. Lower for a semi-transparent watermark." },
+        mask: MASK_SCHEMA,
       },
       required: ["media_id"],
     },
   },
   {
     name: "timeline_trim_clip",
-    description: "Change the in/out points of a clip already on the timeline.",
+    description:
+      "Update an existing timeline clip: trim in/out points, and/or its layering (track_index, timeline_start) and masking (position, opacity, mask). Only pass the fields you want to change — omitted fields are left as-is.",
     input_schema: {
       type: "object",
       properties: {
         clip_id: { type: "string", description: "The timeline clip id, from CURRENT TIMELINE in context." },
         trim_in: { type: "number" },
         trim_out: { type: "number" },
+        track_index: { type: "number", description: "0 = base track. 1+ = overlay track. Moving a base clip to an overlay track requires also setting timeline_start." },
+        timeline_start: { type: "number", description: "For overlay clips (track_index >= 1): when it appears on the master timeline, in seconds." },
+        position: POSITION_SCHEMA,
+        opacity: { type: "number", description: "0-1." },
+        mask: MASK_SCHEMA,
       },
       required: ["clip_id"],
     },

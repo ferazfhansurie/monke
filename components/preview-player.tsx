@@ -1,8 +1,10 @@
 "use client";
 
-import { useRef, type RefObject } from "react";
+import { useRef, type CSSProperties, type RefObject } from "react";
 import { Play, Pause, SkipBack, SkipForward, StepBack, StepForward, Maximize2 } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
+import { clipLayerStyle } from "@/lib/layer-style";
+import { OverlayLayer } from "./overlay-layer";
 import type { useTimelinePlayer } from "@/lib/timeline-player";
 
 function fmtTimecode(sec: number, fps: number) {
@@ -36,6 +38,15 @@ export function PreviewPlayer({ player, videoElA, videoElB }: PreviewPlayerProps
     }
   };
 
+  // Base-track clips are full-frame by default (unchanged from before
+  // layering existed — object-contain via className). Only switch to
+  // inline positioning/mask/opacity when the active clip actually has one
+  // set, so plain single-track edits keep their original look exactly.
+  const activeClip = player.clips[player.activeClipIndex];
+  const hasCustomLayer = !!activeClip && (!!activeClip.position || !!activeClip.mask || activeClip.opacity != null);
+  const activeLayerStyle: CSSProperties | undefined = hasCustomLayer ? clipLayerStyle(activeClip!) : undefined;
+  const slotStyle = (slot: 0 | 1): CSSProperties => (player.activeSlot === slot ? (activeLayerStyle ?? { opacity: 1 }) : { opacity: 0 });
+
   return (
     <div className="flex h-full flex-col bg-[#050607]">
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-1.5">
@@ -47,8 +58,9 @@ export function PreviewPlayer({ player, videoElA, videoElB }: PreviewPlayerProps
 
       <div ref={stageRef} className="relative flex flex-1 items-center justify-center overflow-hidden bg-black p-4">
         <div className="relative h-full max-h-full" style={{ aspectRatio: aspect }}>
-          <video ref={videoElA} className={`absolute inset-0 h-full w-full object-contain ${player.activeSlot === 0 ? "opacity-100" : "opacity-0"}`} playsInline />
-          <video ref={videoElB} className={`absolute inset-0 h-full w-full object-contain ${player.activeSlot === 1 ? "opacity-100" : "opacity-0"}`} playsInline />
+          <video ref={videoElA} className="absolute inset-0 h-full w-full object-contain" style={slotStyle(0)} playsInline />
+          <video ref={videoElB} className="absolute inset-0 h-full w-full object-contain" style={slotStyle(1)} playsInline />
+          <OverlayLayer masterTime={player.currentTime} isPlaying={player.isPlaying} />
           {player.clips.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center border border-dashed border-white/10 text-[11px] text-gray-600">
               Nothing on the timeline
