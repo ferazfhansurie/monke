@@ -1,5 +1,6 @@
 import { neon } from "@neondatabase/serverless";
 import { PLANS, type PlanId } from "./plans";
+import { isAdminEmail } from "./admin";
 
 type SqlRow = Record<string, unknown>;
 type SqlFn = (strings: TemplateStringsArray, ...values: unknown[]) => Promise<SqlRow[]>;
@@ -129,6 +130,29 @@ export async function deductCredits(userId: string, amount: number): Promise<boo
     RETURNING credits
   `;
   return rows.length > 0;
+}
+
+// Sets an ABSOLUTE credit balance — only ever called for the single admin
+// account (lib/admin.ts), and only ever on that account's own id. Every
+// caller must itself verify isAdminEmail before reaching here; this
+// function has no way to know who's asking.
+export async function setCredits(userId: string, credits: number): Promise<void> {
+  await ensureBillingColumns();
+  await sql`UPDATE monke_users SET credits = ${Math.max(0, Math.round(credits))} WHERE id = ${userId}`;
+}
+
+// Auto-grants the admin account a Starter subscription the first time it's
+// seen with no active subscription — skips Stripe checkout entirely, since
+// this one account is for testing, not a real paying customer. Idempotent:
+// once active, calling again is a no-op, so it never repeatedly re-grants
+// credits on every request. Uses a synthetic (non-Stripe) subscription id
+// so webhook-driven lookups by real Stripe subscription ids never collide
+// with it.
+export async function ensureAdminGrant(userId: string, email: string): Promise<void> {
+  if (!isAdminEmail(email)) return;
+  const info = await getBillingInfo(userId);
+  if (info?.subscriptionActive) return;
+  await activateSubscription(userId, "starter", `admin_grant_${userId}`);
 }
 
 // --- Credit math -----------------------------------------------------

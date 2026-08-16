@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { Download, User, LogOut, CreditCard, Coins } from "lucide-react";
+import { Download, User, LogOut, CreditCard, Coins, Shield } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
+import { isAdminEmail } from "@/lib/admin";
 import { ProjectSwitcher } from "./project-switcher";
 
 export function TopBar() {
@@ -13,13 +14,38 @@ export function TopBar() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [credits, setCredits] = useState<number | null>(null);
   const [portalLoading, setPortalLoading] = useState(false);
+  const [creditInput, setCreditInput] = useState("");
+  const [settingCredits, setSettingCredits] = useState(false);
 
-  useEffect(() => {
+  const refreshCredits = () => {
     fetch("/api/billing/status")
       .then((r) => r.json())
       .then((data) => setCredits(typeof data.credits === "number" ? data.credits : null))
       .catch(() => {});
+  };
+
+  useEffect(() => {
+    refreshCredits();
   }, []);
+
+  const isAdmin = !!user?.email && isAdminEmail(user.email);
+
+  const setAdminCredits = async () => {
+    const value = Number(creditInput);
+    if (!Number.isFinite(value)) return;
+    setSettingCredits(true);
+    try {
+      const res = await fetch("/api/billing/admin/credits", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credits: value }),
+      });
+      const data = await res.json();
+      if (res.ok) setCredits(data.credits);
+    } finally {
+      setSettingCredits(false);
+    }
+  };
 
   const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -78,6 +104,30 @@ export function TopBar() {
               >
                 <CreditCard className="h-3 w-3" /> Manage billing
               </button>
+              {isAdmin && (
+                <div className="border-t border-white/10 px-3 py-1.5">
+                  <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold text-gray-500">
+                    <Shield className="h-3 w-3" /> Admin: set credits
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      value={creditInput}
+                      onChange={(e) => setCreditInput(e.target.value)}
+                      placeholder={String(credits ?? 0)}
+                      className="w-full rounded bg-white/5 px-1.5 py-1 text-[11px] text-gray-200 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={setAdminCredits}
+                      disabled={settingCredits || !creditInput}
+                      className="shrink-0 rounded bg-[#f26522] px-2 py-1 text-[10px] font-semibold text-white disabled:opacity-40"
+                    >
+                      Set
+                    </button>
+                  </div>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={logout}
