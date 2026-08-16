@@ -20,7 +20,7 @@ export function TopBar() {
   return (
     <div className="flex h-9 shrink-0 items-center justify-between border-b border-white/10 bg-[#0d1117] px-3">
       <div className="flex items-center gap-2">
-        <Image src="/logo-white.png" alt="MONKe" width={168} height={115} className="h-5 w-auto" priority />
+        <Image src="/logo-white.png" alt="MONKe" width={168} height={115} className="h-7 w-auto" priority />
         <span className="text-gray-700">/</span>
         <ProjectSwitcher />
       </div>
