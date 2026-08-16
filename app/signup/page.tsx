@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import Image from "next/image";
 import { Loader2 } from "lucide-react";
 
 export default function SignupPage() {
@@ -37,9 +38,9 @@ export default function SignupPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-[#0a0c10] px-4">
       <div className="w-full max-w-sm">
-        <div className="mb-8 text-center">
-          <h1 className="text-2xl font-bold tracking-tight text-white">MONKe</h1>
-          <p className="mt-1 text-[13px] text-gray-500">Create your account</p>
+        <div className="mb-8 flex flex-col items-center text-center">
+          <Image src="/logo-white.png" alt="MONKe" width={168} height={115} className="h-12 w-auto" priority />
+          <p className="mt-2 text-[13px] text-gray-500">Create your account</p>
         </div>
         <form onSubmit={submit} className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-5">
           <div>
