@@ -100,17 +100,39 @@ function buildTimelineContext(): string {
     items.length === 0
       ? "Empty — nothing imported yet."
       : items.map((i) => `- ${i.id}: "${i.name}" (${i.kind}${i.durationSec ? `, ${i.durationSec.toFixed(1)}s` : ""})`).join("\n");
-  const sortedClips = [...timeline.clips].sort((a, b) => a.order - b.order);
-  const timelineLines =
-    sortedClips.length === 0
+
+  const baseClips = timeline.clips.filter((c) => (c.trackIndex ?? 0) === 0).sort((a, b) => a.order - b.order);
+  const totalDuration = baseClips.reduce((sum, c) => sum + Math.max(0, c.trimOut - c.trimIn), 0);
+  const baseLines =
+    baseClips.length === 0
       ? "Empty."
-      : sortedClips
+      : baseClips
           .map((c) => {
             const item = items.find((i) => i.id === c.mediaId);
             return `- clip ${c.id} (order ${c.order}): media ${c.mediaId} "${item?.name ?? "?"}", trim ${c.trimIn.toFixed(1)}s-${c.trimOut.toFixed(1)}s`;
           })
           .join("\n");
-  return `## CURRENT LIBRARY\n${libraryLines}\n\n## CURRENT TIMELINE\n${timelineLines}`;
+
+  const overlayClips = timeline.clips.filter((c) => (c.trackIndex ?? 0) > 0).sort((a, b) => (a.trackIndex ?? 0) - (b.trackIndex ?? 0));
+  const overlayLines =
+    overlayClips.length === 0
+      ? "None."
+      : overlayClips
+          .map((c) => {
+            const item = items.find((i) => i.id === c.mediaId);
+            return `- clip ${c.id} (track ${c.trackIndex}): media ${c.mediaId} "${item?.name ?? "?"}", trim ${c.trimIn.toFixed(1)}s-${c.trimOut.toFixed(1)}s, starts at ${(c.timelineStart ?? 0).toFixed(1)}s`;
+          })
+          .join("\n");
+
+  const captionLines =
+    timeline.captions.length === 0
+      ? "None."
+      : [...timeline.captions]
+          .sort((a, b) => a.start - b.start)
+          .map((c) => `- caption ${c.id}: "${c.text}" ${c.start.toFixed(1)}s-${c.end.toFixed(1)}s (${c.fontFamily}, ${c.fontSize}px)`)
+          .join("\n");
+
+  return `## CURRENT LIBRARY\n${libraryLines}\n\n## CURRENT TIMELINE (base track, total ${totalDuration.toFixed(1)}s)\n${baseLines}\n\n## CURRENT OVERLAYS\n${overlayLines}\n\n## CURRENT CAPTIONS\n${captionLines}`;
 }
 
 interface ToolResult {
@@ -209,6 +231,52 @@ async function dispatchTool(name: string, input: Record<string, unknown>): Promi
         ok: true,
         message: `Transcript of ${label}, ${startSeconds.toFixed(1)}s-${endSeconds.toFixed(1)}s:\n"${result.text}"\n\nSegments:\n${segmentLines}`,
       };
+    }
+    if (name === "add_captions") {
+      const rawCaptions = input["captions"];
+      if (!Array.isArray(rawCaptions) || rawCaptions.length === 0) return { ok: false, message: "captions must be a non-empty array." };
+      const fontFamily = str(input, "font_family") ?? "Inter";
+      const fontSize = num(input, "font_size") ?? 64;
+      const color = str(input, "color") ?? "#ffffff";
+      const position = parsePosition(input, "position") ?? { x: 0.05, y: 0.78, width: 0.9, height: 0.15 };
+      const bold = typeof input["bold"] === "boolean" ? (input["bold"] as boolean) : true;
+      const ids: string[] = [];
+      for (const raw of rawCaptions) {
+        if (typeof raw !== "object" || raw === null) return { ok: false, message: "Each caption entry must be an object." };
+        const c = raw as Record<string, unknown>;
+        const text = str(c, "text");
+        const start = num(c, "start");
+        const end = num(c, "end");
+        if (!text || start == null || end == null) return { ok: false, message: "Each caption needs text, start, and end." };
+        if (end <= start) return { ok: false, message: `Caption "${text}" has end <= start.` };
+        ids.push(store.addCaption({ text, start, end, fontFamily, fontSize, color, position, bold }));
+      }
+      return { ok: true, message: `Added ${ids.length} caption${ids.length === 1 ? "" : "s"} (${fontFamily}, ${fontSize}px).` };
+    }
+    if (name === "update_caption") {
+      const captionId = str(input, "caption_id");
+      const caption = captionId ? store.timeline.captions.find((c) => c.id === captionId) : undefined;
+      if (!caption) return { ok: false, message: `No caption with id "${captionId}".` };
+      const position = parsePosition(input, "position");
+      store.updateCaption(caption.id, {
+        ...(str(input, "text") ? { text: str(input, "text") } : {}),
+        ...(num(input, "start") != null ? { start: num(input, "start") } : {}),
+        ...(num(input, "end") != null ? { end: num(input, "end") } : {}),
+        ...(str(input, "font_family") ? { fontFamily: str(input, "font_family") } : {}),
+        ...(num(input, "font_size") != null ? { fontSize: num(input, "font_size") } : {}),
+        ...(str(input, "color") ? { color: str(input, "color") } : {}),
+        ...(position ? { position } : {}),
+        ...(typeof input["bold"] === "boolean" ? { bold: input["bold"] as boolean } : {}),
+      });
+      return { ok: true, message: `Updated caption ${caption.id}.` };
+    }
+    if (name === "remove_caption") {
+      const captionId = str(input, "caption_id");
+      if (!captionId || !store.timeline.captions.some((c) => c.id === captionId)) {
+        return { ok: true, message: `Caption "${captionId}" is already not on the timeline.` };
+      }
+      store.removeCaption(captionId);
+      return { ok: true, message: `Removed caption ${captionId}.` };
     }
     if (name === "timeline_probe_clip") {
       const clipId = str(input, "clip_id");

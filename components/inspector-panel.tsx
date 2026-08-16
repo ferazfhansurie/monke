@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { FULL_FRAME, DEFAULT_PIP_RECT } from "@/lib/layer-style";
+import { GOOGLE_FONTS } from "@/lib/fonts";
 import type { ClipMask, ClipRect } from "@/lib/types";
 
 const ASPECT_PRESETS: Record<string, { w: number; h: number }> = {
@@ -59,11 +60,14 @@ export function InspectorPanel() {
   const items = useMonkeStore((s) => s.items);
   const selectedClipId = useMonkeStore((s) => s.selectedClipId);
   const updateTimelineClip = useMonkeStore((s) => s.updateTimelineClip);
+  const selectedCaptionId = useMonkeStore((s) => s.selectedCaptionId);
+  const updateCaption = useMonkeStore((s) => s.updateCaption);
 
   const durationSec = timeline.clips.reduce((sum, c) => sum + Math.max(0, c.trimOut - c.trimIn), 0);
   const selectedClip = timeline.clips.find((c) => c.id === selectedClipId);
   const selectedItem = selectedClip ? items.find((i) => i.id === selectedClip.mediaId) : undefined;
   const position: ClipRect = selectedClip?.position ?? FULL_FRAME;
+  const selectedCaption = timeline.captions.find((c) => c.id === selectedCaptionId);
 
   return (
     <div className="flex h-full flex-col overflow-y-auto border-l border-white/10 bg-[#0d1117] text-gray-300">
@@ -209,11 +213,97 @@ export function InspectorPanel() {
         </Section>
       )}
 
+      {selectedCaption && (
+        <Section title="Caption">
+          <textarea
+            value={selectedCaption.text}
+            onChange={(e) => updateCaption(selectedCaption.id, { text: e.target.value })}
+            rows={2}
+            className="mb-2 w-full resize-none rounded bg-white/5 px-2 py-1.5 text-[12px] text-gray-200 outline-none"
+          />
+          <Field label="Font">
+            <select
+              value={selectedCaption.fontFamily}
+              onChange={(e) => updateCaption(selectedCaption.id, { fontFamily: e.target.value })}
+              className="max-w-[140px] rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-gray-300 outline-none"
+            >
+              {GOOGLE_FONTS.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Size">
+            <input
+              type="number"
+              min={12}
+              max={200}
+              value={selectedCaption.fontSize}
+              onChange={(e) => updateCaption(selectedCaption.id, { fontSize: Math.max(12, Number(e.target.value) || 64) })}
+              className="w-14 rounded bg-white/5 px-1.5 py-0.5 text-right text-[11px] text-gray-300 outline-none"
+            />
+          </Field>
+          <Field label="Color">
+            <input
+              type="color"
+              value={selectedCaption.color}
+              onChange={(e) => updateCaption(selectedCaption.id, { color: e.target.value })}
+              className="h-6 w-10 rounded bg-white/5 outline-none"
+            />
+          </Field>
+          <Field label="Bold">
+            <input
+              type="checkbox"
+              checked={selectedCaption.bold ?? false}
+              onChange={(e) => updateCaption(selectedCaption.id, { bold: e.target.checked })}
+              className="accent-[#f26522]"
+            />
+          </Field>
+          <Field label="Start">
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                step={0.1}
+                min={0}
+                value={selectedCaption.start}
+                onChange={(e) => updateCaption(selectedCaption.id, { start: Math.max(0, Number(e.target.value) || 0) })}
+                className="w-16 rounded bg-white/5 px-1.5 py-0.5 text-right text-[11px] text-gray-300 outline-none"
+              />
+              <span className="text-[10px] text-gray-600">s</span>
+            </div>
+          </Field>
+          <Field label="End">
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                step={0.1}
+                min={0}
+                value={selectedCaption.end}
+                onChange={(e) => updateCaption(selectedCaption.id, { end: Math.max(selectedCaption.start + 0.1, Number(e.target.value) || selectedCaption.start + 1) })}
+                className="w-16 rounded bg-white/5 px-1.5 py-0.5 text-right text-[11px] text-gray-300 outline-none"
+              />
+              <span className="text-[10px] text-gray-600">s</span>
+            </div>
+          </Field>
+
+          <div className="py-1 text-[10px] font-medium text-gray-600">Position</div>
+          <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+            {(["x", "y", "width", "height"] as const).map((key) => (
+              <label key={key} className="flex items-center justify-between text-[10px] text-gray-500">
+                {key}
+                <PctInput value={selectedCaption.position[key]} onChange={(v) => updateCaption(selectedCaption.id, { position: { ...selectedCaption.position, [key]: v } })} />
+              </label>
+            ))}
+          </div>
+        </Section>
+      )}
+
       <Section title="Keyboard Shortcuts" defaultOpen={false}>
         {[
           ["Space", "Play / pause"],
           ["S", "Split at playhead"],
-          ["Delete", "Remove selected clip"],
+          ["Delete", "Remove selected clip/caption"],
           ["← / →", "Nudge playhead 1 frame"],
         ].map(([key, desc]) => (
           <div key={key} className="flex items-center justify-between py-1">

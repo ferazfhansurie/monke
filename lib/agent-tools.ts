@@ -200,4 +200,64 @@ export const AGENT_TOOLS: AgentTool[] = [
       },
     },
   },
+  {
+    name: "add_captions",
+    description:
+      "Add one or more caption text overlays to the timeline. Get the text/timing from timeline_transcribe_clip first — never invent words or timestamps for speech you haven't actually transcribed. Group short Whisper segments into readable caption lines (roughly 3-8 words / under ~40 characters per line for a vertical video) rather than dumping raw ASR segments 1:1 — you may lightly merge/split segment boundaries for readability, but don't change what was actually said.",
+    input_schema: {
+      type: "object",
+      properties: {
+        captions: {
+          type: "array",
+          description: "Ordered list of caption lines to add.",
+          items: {
+            type: "object",
+            properties: {
+              text: { type: "string" },
+              start: { type: "number", description: "Seconds on the master timeline." },
+              end: { type: "number", description: "Seconds on the master timeline." },
+            },
+            required: ["text", "start", "end"],
+          },
+        },
+        font_family: { type: "string", description: "A Google Fonts family name (e.g. 'Poppins', 'Bebas Neue', 'Anton', 'Inter'). Default 'Inter'." },
+        font_size: { type: "number", description: "px relative to a 1080px-wide reference frame. Default 64 — large and legible for vertical/short-form video." },
+        color: { type: "string", description: "CSS color. Default '#ffffff' (white with a dark outline reads well over most footage)." },
+        position: {
+          ...POSITION_SCHEMA,
+          description: "Where captions sit in frame, fractions 0-1. Default a bottom-center band — roughly {x:0.05,y:0.78,width:0.9,height:0.15} for 9:16.",
+        },
+        bold: { type: "boolean", description: "Default true — bold reads better at caption sizes." },
+      },
+      required: ["captions"],
+    },
+  },
+  {
+    name: "update_caption",
+    description: "Edit an existing caption's text, timing, or style. Only pass the fields you want to change.",
+    input_schema: {
+      type: "object",
+      properties: {
+        caption_id: { type: "string", description: "From CURRENT TIMELINE's captions list." },
+        text: { type: "string" },
+        start: { type: "number" },
+        end: { type: "number" },
+        font_family: { type: "string" },
+        font_size: { type: "number" },
+        color: { type: "string" },
+        position: POSITION_SCHEMA,
+        bold: { type: "boolean" },
+      },
+      required: ["caption_id"],
+    },
+  },
+  {
+    name: "remove_caption",
+    description: "Remove a caption from the timeline.",
+    input_schema: {
+      type: "object",
+      properties: { caption_id: { type: "string" } },
+      required: ["caption_id"],
+    },
+  },
 ];

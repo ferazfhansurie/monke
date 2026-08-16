@@ -5,6 +5,7 @@ import { Play, Pause, SkipBack, SkipForward, StepBack, StepForward, Maximize2 } 
 import { useMonkeStore } from "@/lib/store";
 import { clipLayerStyle } from "@/lib/layer-style";
 import { OverlayLayer } from "./overlay-layer";
+import { CaptionLayer } from "./caption-layer";
 import type { useTimelinePlayer } from "@/lib/timeline-player";
 
 function fmtTimecode(sec: number, fps: number) {
@@ -61,6 +62,7 @@ export function PreviewPlayer({ player, videoElA, videoElB }: PreviewPlayerProps
           <video ref={videoElA} className="absolute inset-0 h-full w-full object-contain" style={slotStyle(0)} playsInline />
           <video ref={videoElB} className="absolute inset-0 h-full w-full object-contain" style={slotStyle(1)} playsInline />
           <OverlayLayer masterTime={player.currentTime} isPlaying={player.isPlaying} />
+          <CaptionLayer masterTime={player.currentTime} />
           {player.clips.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center border border-dashed border-white/10 text-[11px] text-gray-600">
               Nothing on the timeline

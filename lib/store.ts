@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import type { MediaItem, Timeline, TimelineClip, ProjectSettings, ChatMessage, AuthUser } from "./types";
+import type { MediaItem, Timeline, TimelineClip, Caption, ProjectSettings, ChatMessage, AuthUser } from "./types";
 import { DEFAULT_CHAT_MODEL } from "./models";
 import { listMediaHandles, buildMediaItem, kindForName } from "./fs";
 import { DEFAULT_PIP_RECT } from "./layer-style";
@@ -49,7 +49,7 @@ function newProject(name: string): Project {
     folderHandle: null,
     looseFileHandles: [],
     items: [],
-    timeline: { id: `tl_${Date.now()}`, name: "Timeline 1", clips: [] },
+    timeline: { id: `tl_${Date.now()}`, name: "Timeline 1", clips: [], captions: [] },
     settings: defaultSettings,
     messages: [],
     chatModel: DEFAULT_CHAT_MODEL,
@@ -68,6 +68,19 @@ export interface PendingGeneration {
   requestId: string;
   prompt: string;
   startedAt: string;
+}
+
+// What one undo/redo step restores — clips and captions are edited
+// somewhat independently, but they share ONE chronological undo history
+// (interleaved in true edit order), not two separate stacks, so Cmd+Z
+// always reverts whatever you actually did most recently.
+interface TimelineSnapshot {
+  clips: TimelineClip[];
+  captions: Caption[];
+}
+
+function snapshotOf(timeline: Timeline): TimelineSnapshot {
+  return { clips: timeline.clips, captions: timeline.captions };
 }
 
 interface MonkeState {
@@ -89,6 +102,7 @@ interface MonkeState {
   items: MediaItem[];
   selectedItemId: string | null;
   selectedClipId: string | null;
+  selectedCaptionId: string | null;
   timeline: Timeline;
   playheadSec: number;
   isPlaying: boolean;
@@ -96,9 +110,9 @@ interface MonkeState {
   messages: ChatMessage[];
   chatModel: string;
 
-  // Timeline undo/redo — per active project's clip list
-  timelineUndoStack: TimelineClip[][];
-  timelineRedoStack: TimelineClip[][];
+  // Timeline undo/redo — per active project, covers clips AND captions together
+  timelineUndoStack: TimelineSnapshot[];
+  timelineRedoStack: TimelineSnapshot[];
 
   // Persistence — set once hydrateMonkeStore() has attempted to load saved
   // projects from IndexedDB, so the UI doesn't flash an empty state first.
@@ -124,6 +138,7 @@ interface MonkeState {
   removeItem: (id: string) => void;
   selectItem: (id: string | null) => void;
   selectClip: (id: string | null) => void;
+  selectCaption: (id: string | null) => void;
   addTimelineClip: (
     mediaId: string,
     opts?: {
@@ -145,6 +160,9 @@ interface MonkeState {
   reorderTimelineClip: (clipId: string, order: number) => void;
   splitTimelineClip: (clipId: string, atSeconds: number) => string | null;
   buildSequence: (clips: { mediaId: string; trimIn: number; trimOut: number }[]) => void;
+  addCaption: (caption: Omit<Caption, "id">) => string;
+  updateCaption: (id: string, patch: Partial<Omit<Caption, "id">>) => void;
+  removeCaption: (id: string) => void;
   rescanFolder: () => Promise<void>;
   reconnectFolder: () => Promise<void>;
   maybeAutoRescan: () => Promise<void>;
@@ -202,6 +220,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   items: [],
   selectedItemId: null,
   selectedClipId: null,
+  selectedCaptionId: null,
   timeline: initialProject.timeline,
   playheadSec: 0,
   isPlaying: false,
@@ -233,7 +252,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         items: s.items.filter((i) => i.id !== id),
         looseFileHandles: removed ? s.looseFileHandles.filter((h) => h.name !== removed.name) : s.looseFileHandles,
         selectedItemId: s.selectedItemId === id ? null : s.selectedItemId,
-        timelineUndoStack: affectedClips ? [...s.timelineUndoStack.slice(-49), s.timeline.clips] : s.timelineUndoStack,
+        timelineUndoStack: affectedClips ? [...s.timelineUndoStack.slice(-49), snapshotOf(s.timeline)] : s.timelineUndoStack,
         timelineRedoStack: affectedClips ? [] : s.timelineRedoStack,
         timeline: affectedClips ? { ...s.timeline, clips: s.timeline.clips.filter((c) => c.mediaId !== id) } : s.timeline,
       };
@@ -241,6 +260,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   addLooseFileHandle: (handle) => set((s) => ({ looseFileHandles: [...s.looseFileHandles.filter((h) => h.name !== handle.name), handle] })),
   selectItem: (id) => set({ selectedItemId: id }),
   selectClip: (id) => set({ selectedClipId: id }),
+  selectCaption: (id) => set({ selectedCaptionId: id }),
 
   addTimelineClip: (mediaId, opts) => {
     const clipId = `clip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -271,7 +291,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         };
       }
       return {
-        timelineUndoStack: [...s.timelineUndoStack.slice(-49), clips],
+        timelineUndoStack: [...s.timelineUndoStack.slice(-49), snapshotOf(s.timeline)],
         timelineRedoStack: [],
         timeline: { ...s.timeline, clips: [...clips, newClip] },
       };
@@ -281,21 +301,21 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
 
   updateTimelineClip: (clipId, patch) =>
     set((s) => ({
-      timelineUndoStack: [...s.timelineUndoStack.slice(-49), s.timeline.clips],
+      timelineUndoStack: [...s.timelineUndoStack.slice(-49), snapshotOf(s.timeline)],
       timelineRedoStack: [],
       timeline: { ...s.timeline, clips: s.timeline.clips.map((c) => (c.id === clipId ? { ...c, ...patch } : c)) },
     })),
 
   removeTimelineClip: (clipId) =>
     set((s) => ({
-      timelineUndoStack: [...s.timelineUndoStack.slice(-49), s.timeline.clips],
+      timelineUndoStack: [...s.timelineUndoStack.slice(-49), snapshotOf(s.timeline)],
       timelineRedoStack: [],
       timeline: { ...s.timeline, clips: s.timeline.clips.filter((c) => c.id !== clipId) },
     })),
 
   reorderTimelineClip: (clipId, order) =>
     set((s) => ({
-      timelineUndoStack: [...s.timelineUndoStack.slice(-49), s.timeline.clips],
+      timelineUndoStack: [...s.timelineUndoStack.slice(-49), snapshotOf(s.timeline)],
       timelineRedoStack: [],
       timeline: { ...s.timeline, clips: s.timeline.clips.map((c) => (c.id === clipId ? { ...c, order } : c)) },
     })),
@@ -311,7 +331,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       const first: TimelineClip = { ...clip, trimOut: splitPoint };
       const second: TimelineClip = { ...clip, id: newClipId, trimIn: splitPoint, order: clip.order + 0.5 };
       return {
-        timelineUndoStack: [...s.timelineUndoStack.slice(-49), s.timeline.clips],
+        timelineUndoStack: [...s.timelineUndoStack.slice(-49), snapshotOf(s.timeline)],
         timelineRedoStack: [],
         timeline: {
           ...s.timeline,
@@ -327,7 +347,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   // addTimelineClip round-trips.
   buildSequence: (clips) =>
     set((s) => ({
-      timelineUndoStack: [...s.timelineUndoStack.slice(-49), s.timeline.clips],
+      timelineUndoStack: [...s.timelineUndoStack.slice(-49), snapshotOf(s.timeline)],
       timelineRedoStack: [],
       timeline: {
         ...s.timeline,
@@ -339,6 +359,31 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
           order: i,
         })),
       },
+    })),
+
+  addCaption: (caption) => {
+    const id = `cap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    set((s) => ({
+      timelineUndoStack: [...s.timelineUndoStack.slice(-49), snapshotOf(s.timeline)],
+      timelineRedoStack: [],
+      timeline: { ...s.timeline, captions: [...s.timeline.captions, { ...caption, id }] },
+    }));
+    return id;
+  },
+
+  updateCaption: (id, patch) =>
+    set((s) => ({
+      timelineUndoStack: [...s.timelineUndoStack.slice(-49), snapshotOf(s.timeline)],
+      timelineRedoStack: [],
+      timeline: { ...s.timeline, captions: s.timeline.captions.map((c) => (c.id === id ? { ...c, ...patch } : c)) },
+    })),
+
+  removeCaption: (id) =>
+    set((s) => ({
+      timelineUndoStack: [...s.timelineUndoStack.slice(-49), snapshotOf(s.timeline)],
+      timelineRedoStack: [],
+      timeline: { ...s.timeline, captions: s.timeline.captions.filter((c) => c.id !== id) },
+      selectedCaptionId: s.selectedCaptionId === id ? null : s.selectedCaptionId,
     })),
 
   // Rebuilds the whole media library from every known source: the saved
@@ -419,8 +464,8 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       const prev = s.timelineUndoStack[s.timelineUndoStack.length - 1];
       return {
         timelineUndoStack: s.timelineUndoStack.slice(0, -1),
-        timelineRedoStack: [...s.timelineRedoStack, s.timeline.clips],
-        timeline: { ...s.timeline, clips: prev },
+        timelineRedoStack: [...s.timelineRedoStack, snapshotOf(s.timeline)],
+        timeline: { ...s.timeline, clips: prev.clips, captions: prev.captions },
       };
     }),
 
@@ -430,8 +475,8 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       const next = s.timelineRedoStack[s.timelineRedoStack.length - 1];
       return {
         timelineRedoStack: s.timelineRedoStack.slice(0, -1),
-        timelineUndoStack: [...s.timelineUndoStack, s.timeline.clips],
-        timeline: { ...s.timeline, clips: next },
+        timelineUndoStack: [...s.timelineUndoStack, snapshotOf(s.timeline)],
+        timeline: { ...s.timeline, clips: next.clips, captions: next.captions },
       };
     }),
 
@@ -470,6 +515,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         items: fresh.items,
         selectedItemId: null,
         selectedClipId: null,
+        selectedCaptionId: null,
         timeline: fresh.timeline,
         settings: fresh.settings,
         messages: fresh.messages,
@@ -498,6 +544,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         items: target.items,
         selectedItemId: null,
         selectedClipId: null,
+        selectedCaptionId: null,
         timeline: target.timeline,
         settings: target.settings,
         messages: target.messages,
@@ -526,7 +573,8 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       items: [],
       selectedItemId: null,
       selectedClipId: null,
-      timeline: { id: "tl_1", name: "Timeline 1", clips: [] },
+      selectedCaptionId: null,
+      timeline: { id: "tl_1", name: "Timeline 1", clips: [], captions: [] },
       playheadSec: 0,
       isPlaying: false,
       messages: [],
@@ -643,7 +691,9 @@ export async function hydrateMonkeStore(): Promise<void> {
       folderHandle: p.folderHandle,
       looseFileHandles: p.looseFileHandles ?? [],
       items: [],
-      timeline: p.timeline,
+      // Older persisted records predate captions — default so nothing
+      // downstream has to null-check timeline.captions.
+      timeline: { ...p.timeline, captions: p.timeline.captions ?? [] },
       settings: p.settings,
       messages: p.messages,
       chatModel: p.chatModel,

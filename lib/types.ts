@@ -59,10 +59,27 @@ export interface TimelineClip {
   mask?: ClipMask;
 }
 
+// A caption is text, not media — it has no mediaId, sits on its own
+// implicit layer above everything else, and positions itself the same
+// fractional way as a clip's ClipRect.
+export interface Caption {
+  id: string;
+  text: string;
+  start: number; // seconds on the master timeline
+  end: number;
+  fontFamily: string; // a Google Fonts family name, loaded on demand
+  fontSize: number; // px, relative to a 1080px-wide reference frame (scaled to actual resolution when rendered)
+  color: string; // CSS color
+  position: ClipRect; // fractional 0-1 frame rect the text box occupies
+  bold?: boolean;
+  outline?: boolean; // dark stroke/shadow for legibility over busy footage — on by default
+}
+
 export interface Timeline {
   id: string;
   name: string;
   clips: TimelineClip[];
+  captions: Caption[];
 }
 
 export interface ProjectSettings {
