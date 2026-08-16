@@ -5,7 +5,7 @@ import { Sparkles, Film, Captions, Mic, Music, FolderTree, Send, Plus, History, 
 import { useMonkeStore } from "@/lib/store";
 import { CHAT_MODELS } from "@/lib/models";
 import { captureFrames } from "@/lib/fs";
-import { transcribeAudio } from "@/lib/audio";
+import { transcribeAudio, subscribeAsrStatus } from "@/lib/audio";
 import { startVideoGeneration } from "@/lib/generation";
 import { Markdown } from "./markdown";
 import type { ChatMessage, ChatMessagePart, ClipMask, ClipRect } from "@/lib/types";
@@ -497,6 +497,8 @@ export function ChatPanel() {
   const setChatModel = useMonkeStore((s) => s.setChatModel);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [asrStatus, setAsrStatus] = useState<string | null>(null);
+  useEffect(() => subscribeAsrStatus(setAsrStatus), []);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const currentModel = CHAT_MODELS.find((m) => m.id === chatModel) ?? CHAT_MODELS[0];
@@ -777,7 +779,7 @@ export function ChatPanel() {
             })}
             {loading && (
               <div className="flex items-center gap-1.5 text-[11px] text-gray-500">
-                <Loader2 className="h-3 w-3 animate-spin" /> Thinking…
+                <Loader2 className="h-3 w-3 animate-spin" /> {asrStatus ?? "Thinking…"}
               </div>
             )}
           </div>

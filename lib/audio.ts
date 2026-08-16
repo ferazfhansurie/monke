@@ -9,11 +9,36 @@ import type { MediaItem } from "./types";
 
 let pipelinePromise: Promise<unknown> | null = null;
 
+// The whisper-small download (~250-970MB depending on which dtype the
+// browser's WASM backend accepts, see below) can take a couple of minutes
+// on a slow connection. With no visible feedback that just reads as "stuck"
+// — this is a tiny pub-sub so any UI (the chat panel's loading indicator)
+// can show real download progress instead of a generic spinner.
+type AsrStatusListener = (message: string | null) => void;
+const asrStatusListeners = new Set<AsrStatusListener>();
+
+export function subscribeAsrStatus(listener: AsrStatusListener): () => void {
+  asrStatusListeners.add(listener);
+  return () => asrStatusListeners.delete(listener);
+}
+
+function setAsrStatus(message: string | null) {
+  for (const listener of asrStatusListeners) listener(message);
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getAsrPipeline(): Promise<any> {
   if (!pipelinePromise) {
     pipelinePromise = (async () => {
       const { pipeline } = await import("@huggingface/transformers");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const progress_callback = (data: any) => {
+        if (data.status === "progress" && typeof data.progress === "number") {
+          setAsrStatus(`Downloading speech model — ${Math.round(data.progress)}% (first time only, then it's cached)`);
+        } else if (data.status === "ready" || data.status === "done") {
+          setAsrStatus(null);
+        }
+      };
       try {
         // q8 (~250MB total) loads fine on native/Node ONNX backends — but
         // whisper's decoder embedding layer ships 4-bit block-quantized
@@ -24,17 +49,19 @@ async function getAsrPipeline(): Promise<any> {
         // whisper-base q8 export. Try it first since it's smaller and faster
         // when it works, and fall back to fp32 (~970MB) if the WASM backend
         // can't initialize it.
-        return await pipeline("automatic-speech-recognition", "Xenova/whisper-small", { dtype: "q8" });
+        return await pipeline("automatic-speech-recognition", "Xenova/whisper-small", { dtype: "q8", progress_callback });
       } catch {
-        return await pipeline("automatic-speech-recognition", "Xenova/whisper-small", { dtype: "fp32" });
+        return await pipeline("automatic-speech-recognition", "Xenova/whisper-small", { dtype: "fp32", progress_callback });
       }
-    })().catch((err) => {
-      // Don't let a failed load poison every future attempt — clear the
-      // cache so the next transcribe call gets a fresh try instead of
-      // permanently re-throwing this same rejected promise.
-      pipelinePromise = null;
-      throw err;
-    });
+    })()
+      .catch((err) => {
+        // Don't let a failed load poison every future attempt — clear the
+        // cache so the next transcribe call gets a fresh try instead of
+        // permanently re-throwing this same rejected promise.
+        pipelinePromise = null;
+        throw err;
+      })
+      .finally(() => setAsrStatus(null));
   }
   return pipelinePromise;
 }
