@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Sparkles, Film, Captions, Mic, Music, FolderTree, Send, Plus, History, Loader2, ChevronDown, Check } from "lucide-react";
+import { useRef, useState } from "react";
+import { Sparkles, Film, Captions, Mic, Music, FolderTree, Send, Plus, History, Loader2, ChevronDown, Check, Square, X } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { CHAT_MODELS } from "@/lib/models";
 import { captureFrames } from "@/lib/fs";
@@ -33,13 +33,22 @@ function num(input: Record<string, unknown>, key: string): number | undefined {
 // Converts the store's display-oriented ChatMessage[] into the Anthropic
 // Messages API shape. Kept as a pure function (not stored) so the two
 // representations can't drift — the store is the single source of truth.
-function toAnthropicMessages(messages: ChatMessage[]): Array<{ role: "user" | "assistant"; content: unknown }> {
-  return messages.map((m) => ({
+//
+// keepImagesAfterIndex bounds how many trailing messages still carry their
+// captured frames — every image ever probed was otherwise being resent on
+// EVERY subsequent turn (turn N resends turns 1..N-1's images too), so an
+// analysis that probes footage 8-10 times before building was re-uploading
+// dozens of frames per request, growing every turn. That's almost
+// certainly why long probing sessions were hanging/timing out. Older
+// bursts fall back to their text summary only — the model already reasoned
+// over the pixels when it saw them; it doesn't need them replayed forever.
+function toAnthropicMessages(messages: ChatMessage[], keepImagesAfterIndex = 0): Array<{ role: "user" | "assistant"; content: unknown }> {
+  return messages.map((m, idx) => ({
     role: m.role,
     content: m.parts.map((p) => {
       if (p.type === "text") return { type: "text", text: p.text ?? "" };
       if (p.type === "tool_use") return { type: "tool_use", id: p.toolUseId, name: p.name, input: p.input ?? {} };
-      if (p.type === "tool_result" && p.imageDataUrls && p.imageDataUrls.length > 0) {
+      if (p.type === "tool_result" && idx >= keepImagesAfterIndex && p.imageDataUrls && p.imageDataUrls.length > 0) {
         return {
           type: "tool_result",
           tool_use_id: p.toolUseId,
@@ -220,19 +229,67 @@ export function ChatPanel() {
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const currentModel = CHAT_MODELS.find((m) => m.id === chatModel) ?? CHAT_MODELS[0];
 
-  const send = async (text: string) => {
-    if (!text.trim() || loading) return;
+  // Queued messages sent while the agent is mid-run — held here and drained
+  // one at a time once the current run finishes, instead of forcing the
+  // user to wait for a long multi-tool-call analysis to finish before they
+  // can type the next thing. A ref (not just state) so the finally-block
+  // continuation always sees the latest queue, not a stale closure.
+  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
+  const queueRef = useRef<string[]>([]);
+  const abortRef = useRef<AbortController | null>(null);
+  const stoppedByUserRef = useRef(false);
+
+  const dequeueAndSendNext = () => {
+    const next = queueRef.current.shift();
+    setQueuedMessages([...queueRef.current]);
+    if (next !== undefined) void send(next);
+  };
+
+  const removeQueuedMessage = (index: number) => {
+    queueRef.current = queueRef.current.filter((_, i) => i !== index);
+    setQueuedMessages([...queueRef.current]);
+  };
+
+  const stop = () => {
+    stoppedByUserRef.current = true;
+    abortRef.current?.abort();
+  };
+
+  // Public entry point from the input box / starter buttons: if the agent
+  // is already mid-run, queue instead of blocking the user from typing the
+  // next thing (or dropping it). Only the actual `send` below talks to the API.
+  const submit = (text: string) => {
+    if (!text.trim()) return;
     setInput("");
+    if (loading) {
+      queueRef.current = [...queueRef.current, text];
+      setQueuedMessages([...queueRef.current]);
+      return;
+    }
+    void send(text);
+  };
+
+  const send = async (text: string) => {
+    if (!text.trim()) return;
     let history = [...messages, { id: "", role: "user" as const, parts: [{ type: "text" as const, text }], createdAt: "" }];
     pushMessage("user", [{ type: "text", text }]);
     setLoading(true);
+    stoppedByUserRef.current = false;
+    const controller = new AbortController();
+    abortRef.current = controller;
 
+    let finishedNaturally = false;
     try {
       for (let turn = 0; turn < MAX_TURNS; turn++) {
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: toAnthropicMessages(history), timelineContext: buildTimelineContext(), model: chatModel }),
+          signal: controller.signal,
+          body: JSON.stringify({
+            messages: toAnthropicMessages(history, Math.max(0, history.length - 4)),
+            timelineContext: buildTimelineContext(),
+            model: chatModel,
+          }),
         });
         const data = await res.json();
         if (!res.ok) {
@@ -253,10 +310,16 @@ export function ChatPanel() {
         const assistantMsg = pushMessage("assistant", assistantParts);
         history = [...history, assistantMsg];
 
-        if (data.stop_reason !== "tool_use") break;
+        if (data.stop_reason !== "tool_use") {
+          finishedNaturally = true;
+          break;
+        }
 
         const toolUses = content.filter((b) => b.type === "tool_use");
-        if (toolUses.length === 0) break;
+        if (toolUses.length === 0) {
+          finishedNaturally = true;
+          break;
+        }
 
         const resultParts: ChatMessagePart[] = await Promise.all(
           toolUses.map(async (tu) => {
@@ -267,10 +330,24 @@ export function ChatPanel() {
         const resultMsg = pushMessage("user", resultParts);
         history = [...history, resultMsg];
       }
+      if (!finishedNaturally) {
+        pushMessage("assistant", [
+          {
+            type: "text",
+            text: `Ran out of steps for this request after ${MAX_TURNS} tool calls without finishing — footage this long may need a couple of messages. Say **"continue"** and I'll pick up where I left off.`,
+          },
+        ]);
+      }
     } catch (err) {
-      pushMessage("assistant", [{ type: "text", text: `Error: ${err instanceof Error ? err.message : "Something went wrong"}` }]);
+      if (err instanceof DOMException && err.name === "AbortError") {
+        pushMessage("assistant", [{ type: "text", text: stoppedByUserRef.current ? "_Stopped._" : "_Cancelled._" }]);
+      } else {
+        pushMessage("assistant", [{ type: "text", text: `Error: ${err instanceof Error ? err.message : "Something went wrong"}` }]);
+      }
     } finally {
+      abortRef.current = null;
       setLoading(false);
+      dequeueAndSendNext();
     }
   };
 
@@ -302,7 +379,7 @@ export function ChatPanel() {
                 <button
                   key={s.label}
                   type="button"
-                  onClick={() => send(s.label)}
+                  onClick={() => submit(s.label)}
                   className="flex items-center gap-2.5 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2.5 text-left text-[12px] text-gray-300 hover:border-[#f26522]/50 hover:bg-[#f26522]/5 transition-colors"
                 >
                   <s.icon className="h-3.5 w-3.5 shrink-0 text-gray-500" />
@@ -364,6 +441,19 @@ export function ChatPanel() {
       </div>
 
       <div className="border-t border-white/10 p-2">
+        {queuedMessages.length > 0 && (
+          <div className="mb-1.5 flex flex-col gap-1">
+            {queuedMessages.map((q, i) => (
+              <div key={i} className="flex items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[10px] text-gray-400">
+                <span className="shrink-0 text-gray-600">Queued</span>
+                <span className="flex-1 truncate">{q}</span>
+                <button type="button" onClick={() => removeQueuedMessage(i)} className="shrink-0 rounded p-0.5 text-gray-600 hover:bg-white/10 hover:text-gray-300" title="Remove from queue">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex items-end gap-1.5 rounded-lg border border-white/10 bg-white/[0.02] px-2 py-1.5 focus-within:border-[#f26522]/50">
           <textarea
             value={input}
@@ -371,22 +461,32 @@ export function ChatPanel() {
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                send(input);
+                submit(input);
               }
             }}
             rows={1}
-            placeholder="Ask, or type @ to reference media"
-            disabled={loading}
-            className="max-h-24 w-full resize-none bg-transparent text-[12px] text-gray-200 placeholder:text-gray-600 outline-none disabled:opacity-50"
+            placeholder={loading ? "Ask a follow-up — it'll queue until this finishes" : "Ask, or type @ to reference media"}
+            className="max-h-24 w-full resize-none bg-transparent text-[12px] text-gray-200 placeholder:text-gray-600 outline-none"
           />
-          <button
-            type="button"
-            onClick={() => send(input)}
-            disabled={!input.trim() || loading}
-            className="shrink-0 rounded-md bg-[#f26522] p-1.5 text-white disabled:opacity-30 hover:bg-[#d9541a] transition-colors"
-          >
-            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-          </button>
+          {loading ? (
+            <button
+              type="button"
+              onClick={stop}
+              title="Stop"
+              className="shrink-0 rounded-md bg-white/10 p-1.5 text-white hover:bg-white/20 transition-colors"
+            >
+              <Square className="h-3 w-3" fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => submit(input)}
+              disabled={!input.trim()}
+              className="shrink-0 rounded-md bg-[#f26522] p-1.5 text-white disabled:opacity-30 hover:bg-[#d9541a] transition-colors"
+            >
+              <Send className="h-3 w-3" />
+            </button>
+          )}
         </div>
         <div className="relative mt-1.5">
           <button
