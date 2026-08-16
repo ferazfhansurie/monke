@@ -95,8 +95,55 @@ function parseMask(input: Record<string, unknown>, key: string): ClipMask | unde
 // certainly why long probing sessions were hanging/timing out. Older
 // bursts fall back to their text summary only — the model already reasoned
 // over the pixels when it saw them; it doesn't need them replayed forever.
-function toAnthropicMessages(messages: ChatMessage[], keepImagesAfterIndex = 0): Array<{ role: "user" | "assistant"; content: unknown }> {
-  return messages.map((m, idx) => ({
+interface AnthropicMsg {
+  role: "user" | "assistant";
+  content: Array<Record<string, unknown>>;
+}
+
+// Anthropic's API hard-rejects (400) any request where an assistant
+// message's tool_use blocks aren't immediately followed by matching
+// tool_result blocks in the very next message. That pairing can break for
+// reasons outside this function's control — a tool dispatch throwing
+// before its result was ever recorded, a request aborted mid-turn, or any
+// future bug of the same shape — and once it breaks, the conversation is
+// PERMANENTLY stuck: every subsequent send resends the same broken
+// history and gets the same 400, forever, with no way to recover short of
+// starting a new chat and losing the whole thread. Self-heal instead:
+// synthesize a placeholder tool_result for any orphaned tool_use id right
+// before sending, so one bad turn can't brick the rest of the conversation.
+function repairDanglingToolUse(msgs: AnthropicMsg[]): AnthropicMsg[] {
+  const out: AnthropicMsg[] = [];
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i];
+    out.push(m);
+    if (m.role !== "assistant") continue;
+    const toolUseIds = m.content.filter((b) => b.type === "tool_use").map((b) => b.id as string).filter(Boolean);
+    if (toolUseIds.length === 0) continue;
+
+    const next = msgs[i + 1];
+    const presentIds = new Set(
+      next && next.role === "user" ? next.content.filter((b) => b.type === "tool_result").map((b) => b.tool_use_id as string) : []
+    );
+    const missing = toolUseIds.filter((id) => !presentIds.has(id));
+    if (missing.length === 0) continue;
+
+    const synthetic = missing.map((id) => ({
+      type: "tool_result",
+      tool_use_id: id,
+      content: "Interrupted — no result was recorded for this tool call.",
+      is_error: true,
+    }));
+    if (next && next.role === "user") {
+      next.content = [...synthetic, ...next.content];
+    } else {
+      out.push({ role: "user", content: synthetic });
+    }
+  }
+  return out;
+}
+
+function toAnthropicMessages(messages: ChatMessage[], keepImagesAfterIndex = 0): AnthropicMsg[] {
+  const mapped: AnthropicMsg[] = messages.map((m, idx) => ({
     role: m.role,
     content: m.parts.map((p) => {
       if (p.type === "text") return { type: "text", text: p.text ?? "" };
@@ -118,6 +165,7 @@ function toAnthropicMessages(messages: ChatMessage[], keepImagesAfterIndex = 0):
       return { type: "tool_result", tool_use_id: p.toolUseId, content: p.content ?? "", is_error: p.isError || undefined };
     }),
   }));
+  return repairDanglingToolUse(mapped);
 }
 
 function buildTimelineContext(): string {
