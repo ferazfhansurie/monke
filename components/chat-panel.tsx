@@ -241,9 +241,14 @@ export function ChatPanel() {
         }
 
         const content = data.content as Array<{ type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }>;
-        const assistantParts: ChatMessagePart[] = content.map((block) => {
-          if (block.type === "text") return { type: "text", text: block.text };
-          return { type: "tool_use", name: block.name, input: block.input, toolUseId: block.id };
+        // Claude's content blocks can be more than just "text"/"tool_use"
+        // (e.g. "thinking") — anything else was previously falling through
+        // to the tool_use branch with no id, producing a malformed tool_use
+        // block that Anthropic's API then rejected on the next turn.
+        const assistantParts: ChatMessagePart[] = content.flatMap((block): ChatMessagePart[] => {
+          if (block.type === "text") return [{ type: "text", text: block.text }];
+          if (block.type === "tool_use" && block.id) return [{ type: "tool_use", name: block.name, input: block.input, toolUseId: block.id }];
+          return [];
         });
         const assistantMsg = pushMessage("assistant", assistantParts);
         history = [...history, assistantMsg];

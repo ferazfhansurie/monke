@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { EditorStage } from "@/components/editor-stage";
-import { useMonkeStore } from "@/lib/store";
+import { useMonkeStore, hydrateMonkeStore } from "@/lib/store";
 
 export default function Home() {
   const router = useRouter();
@@ -14,12 +14,13 @@ export default function Home() {
   useEffect(() => {
     fetch("/api/auth/me")
       .then((r) => r.json())
-      .then((data) => {
+      .then(async (data) => {
         if (!data.user) {
           router.replace("/login");
           return;
         }
         setUser(data.user);
+        await hydrateMonkeStore();
         setReady(true);
       })
       .catch(() => router.replace("/login"));

@@ -2,7 +2,16 @@
 // File System Access API. Declare what we use explicitly so the build never
 // depends on which TS/lib.dom snapshot happens to include it.
 
-interface FileSystemDirectoryHandle {
+// Handles are stored in IndexedDB across reloads (structured-cloneable per
+// spec) so a project's folder reference survives a page refresh/redeploy —
+// but the browser may downgrade the grant to "prompt" between sessions, so
+// every handle exposes query/requestPermission to check/reacquire it.
+interface FileSystemHandlePermissions {
+  queryPermission(descriptor?: { mode?: "read" | "readwrite" }): Promise<"granted" | "denied" | "prompt">;
+  requestPermission(descriptor?: { mode?: "read" | "readwrite" }): Promise<"granted" | "denied" | "prompt">;
+}
+
+interface FileSystemDirectoryHandle extends FileSystemHandlePermissions {
   readonly kind: "directory";
   readonly name: string;
   values(): AsyncIterableIterator<FileSystemHandle>;
@@ -13,7 +22,7 @@ interface FileSystemDirectoryHandle {
   isSameEntry(other: FileSystemHandle): Promise<boolean>;
 }
 
-interface FileSystemFileHandle {
+interface FileSystemFileHandle extends FileSystemHandlePermissions {
   readonly kind: "file";
   readonly name: string;
   getFile(): Promise<File>;

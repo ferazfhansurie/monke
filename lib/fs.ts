@@ -155,11 +155,19 @@ export async function captureFrames(item: MediaItem, atSecondsList: number[]): P
   }
 }
 
+// Deterministic (not random) so re-scanning the same folder after a reload
+// reproduces the same ids — required for a persisted Timeline's clips
+// (which reference MediaItem.id) to still resolve after the media library
+// is rebuilt from scratch.
+function mediaIdForName(name: string): string {
+  return `media_${name.toLowerCase().replace(/[^a-z0-9._-]/g, "_")}`;
+}
+
 export async function buildMediaItem(handle: FileSystemFileHandle, kind: MediaKind): Promise<MediaItem> {
   const file = await handle.getFile();
   const objectUrl = URL.createObjectURL(file);
   const base: MediaItem = {
-    id: `media_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    id: mediaIdForName(handle.name),
     name: handle.name,
     kind,
     handle,

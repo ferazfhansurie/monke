@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { FolderOpen, Import, Search, LayoutGrid, Film, Music, Image as ImageIcon } from "lucide-react";
+import { FolderOpen, Import, Search, LayoutGrid, Film, Music, Image as ImageIcon, RefreshCw } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { openProjectFolder, listMediaHandles, buildMediaItem, isFileSystemAccessSupported } from "@/lib/fs";
 
@@ -24,6 +24,9 @@ export function MediaLibrary() {
   const loadProgress = useMonkeStore((s) => s.loadProgress);
   const setLoadProgress = useMonkeStore((s) => s.setLoadProgress);
   const projectName = useMonkeStore((s) => s.projectName);
+  const folderNeedsReconnect = useMonkeStore((s) => s.folderNeedsReconnect);
+  const reconnectFolder = useMonkeStore((s) => s.reconnectFolder);
+  const [reconnecting, setReconnecting] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
@@ -137,12 +140,37 @@ export function MediaLibrary() {
         </div>
       )}
 
+      {folderNeedsReconnect && (
+        <div className="mx-2 mb-2 flex flex-col gap-1.5 rounded-md border border-[#f26522]/30 bg-[#f26522]/5 px-2.5 py-2">
+          <p className="text-[10px] text-gray-300">
+            This project&apos;s saved footage folder needs permission again after the reload — your browser only remembers access for a
+            while.
+          </p>
+          <button
+            type="button"
+            disabled={reconnecting}
+            onClick={async () => {
+              setReconnecting(true);
+              await reconnectFolder();
+              setReconnecting(false);
+            }}
+            className="flex items-center justify-center gap-1.5 self-start rounded-md bg-[#f26522] px-2 py-1 text-[10px] font-semibold text-white hover:bg-[#d9541a] disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw className={`h-3 w-3 ${reconnecting ? "animate-spin" : ""}`} /> Reconnect Folder
+          </button>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {items.length === 0 && !isLoadingFolder ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-4 text-center">
             <FolderOpen className="h-8 w-8 text-gray-700" />
             <p className="text-[11px] text-gray-500">
-              {projectName === "Untitled Project" ? "Open a folder of footage to get started." : "No media in this folder yet."}
+              {folderNeedsReconnect
+                ? "Click Reconnect Folder above to restore your media."
+                : projectName === "Untitled Project"
+                  ? "Open a folder of footage to get started."
+                  : "No media in this folder yet."}
             </p>
           </div>
         ) : filteredItems.length === 0 ? (

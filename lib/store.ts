@@ -3,6 +3,8 @@
 import { create } from "zustand";
 import type { MediaItem, Timeline, TimelineClip, ProjectSettings, ChatMessage, AuthUser } from "./types";
 import { DEFAULT_CHAT_MODEL } from "./models";
+import { listMediaHandles, buildMediaItem } from "./fs";
+import { saveProjectToDb, loadAllProjectsFromDb, getPersistedActiveProjectId, setPersistedActiveProjectId, type PersistedProject } from "./idb";
 
 // A Project bundles everything that should switch together — library,
 // timeline, settings, chat. Session-scoped for now (not persisted across a
@@ -75,6 +77,14 @@ interface MonkeState {
   timelineUndoStack: TimelineClip[][];
   timelineRedoStack: TimelineClip[][];
 
+  // Persistence — set once hydrateMonkeStore() has attempted to load saved
+  // projects from IndexedDB, so the UI doesn't flash an empty state first.
+  hydrated: boolean;
+  // True when the active project has a saved folder handle but the browser
+  // hasn't (yet) granted permission back to it this session — the user has
+  // to click to re-grant (browsers require a user gesture for this).
+  folderNeedsReconnect: boolean;
+
   // Panels
   theme: "light" | "dark";
 
@@ -91,6 +101,9 @@ interface MonkeState {
   reorderTimelineClip: (clipId: string, order: number) => void;
   splitTimelineClip: (clipId: string, atSeconds: number) => string | null;
   buildSequence: (clips: { mediaId: string; trimIn: number; trimOut: number }[]) => void;
+  rescanFolder: () => Promise<void>;
+  reconnectFolder: () => Promise<void>;
+  maybeAutoRescan: () => Promise<void>;
   undoTimeline: () => void;
   redoTimeline: () => void;
   setPlayhead: (sec: number) => void;
@@ -148,6 +161,8 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   chatModel: DEFAULT_CHAT_MODEL,
   timelineUndoStack: [],
   timelineRedoStack: [],
+  hydrated: false,
+  folderNeedsReconnect: false,
   theme: "dark",
 
   setUser: (user) => set({ user }),
@@ -243,6 +258,60 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       },
     })),
 
+  // Re-lists the active project's saved folder and rebuilds the media
+  // library from it — used after hydration (folder permission still
+  // granted) and after reconnectFolder() regrants it. Media ids are
+  // deterministic from filename, so a persisted Timeline's clips still
+  // resolve against the freshly rebuilt items.
+  rescanFolder: async () => {
+    const dir = get().folderHandle;
+    if (!dir) return;
+    set({ isLoadingFolder: true, items: [] });
+    try {
+      const handles = await listMediaHandles(dir);
+      set({ loadProgress: { done: 0, total: handles.length } });
+      for (let i = 0; i < handles.length; i++) {
+        const item = await buildMediaItem(handles[i].handle, handles[i].kind);
+        set((s) => ({ items: [...s.items, item] }));
+        set({ loadProgress: { done: i + 1, total: handles.length } });
+      }
+      set({ folderNeedsReconnect: false });
+    } catch (err) {
+      console.error("Failed to rescan folder:", err);
+    } finally {
+      set({ isLoadingFolder: false, loadProgress: null });
+    }
+  },
+
+  // Must run inside a user gesture (button click) — browsers require that
+  // to re-grant a File System Access permission that lapsed between
+  // sessions.
+  reconnectFolder: async () => {
+    const dir = get().folderHandle;
+    if (!dir) return;
+    try {
+      const perm = await dir.requestPermission({ mode: "readwrite" });
+      if (perm === "granted") await get().rescanFolder();
+    } catch (err) {
+      console.error("Failed to reconnect folder:", err);
+    }
+  },
+
+  // Called after switching/creating/hydrating into a project whose items
+  // haven't been loaded yet this session — silently re-scans if permission
+  // is still granted, otherwise flags for a manual reconnect click.
+  maybeAutoRescan: async () => {
+    const s = get();
+    if (!s.folderHandle || s.items.length > 0 || s.isLoadingFolder) return;
+    try {
+      const perm = await s.folderHandle.queryPermission({ mode: "readwrite" });
+      if (perm === "granted") await get().rescanFolder();
+      else set({ folderNeedsReconnect: true });
+    } catch {
+      set({ folderNeedsReconnect: true });
+    }
+  },
+
   undoTimeline: () =>
     set((s) => {
       if (s.timelineUndoStack.length === 0) return s;
@@ -287,7 +356,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       projects: s.projects.map((p) => (p.id === id ? { ...p, name } : p)),
     })),
 
-  createProject: () =>
+  createProject: () => {
     set((s) => {
       const synced = syncActiveProjectIntoList(s);
       const fresh = newProject(`Untitled Project ${synced.length + 1}`);
@@ -306,10 +375,12 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         isPlaying: false,
         timelineUndoStack: [],
         timelineRedoStack: [],
+        folderNeedsReconnect: false,
       };
-    }),
+    });
+  },
 
-  switchProject: (id) =>
+  switchProject: (id) => {
     set((s) => {
       if (id === s.activeProjectId) return s;
       const synced = syncActiveProjectIntoList(s);
@@ -330,8 +401,11 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         isPlaying: false,
         timelineUndoStack: [],
         timelineRedoStack: [],
+        folderNeedsReconnect: false,
       };
-    }),
+    });
+    get().maybeAutoRescan();
+  },
 
   setTheme: (t) => set({ theme: t }),
   reset: () =>
@@ -348,3 +422,97 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       timelineRedoStack: [],
     }),
 }));
+
+// --- Auto-save --------------------------------------------------------
+// Debounced: any change to the fields that matter gets folded into
+// `projects` and written to IndexedDB shortly after. Media bytes never
+// leave disk — only the folder handle reference, timeline, settings, and
+// chat history are persisted, so a reload/redeploy restores the project
+// without re-uploading anything. Frame images captured by
+// timeline_probe_clip are stripped before saving (large, and re-derivable
+// on demand) — only the surrounding text/tool-call record is kept.
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+function schedulePersist(state: MonkeState) {
+  if (typeof window === "undefined") return;
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    const list = syncActiveProjectIntoList(state);
+    for (const p of list) {
+      const persisted: PersistedProject = {
+        id: p.id,
+        name: p.name,
+        createdAt: p.createdAt,
+        folderHandle: p.folderHandle,
+        timeline: p.timeline,
+        settings: p.settings,
+        messages: p.messages.map((m) => ({ ...m, parts: m.parts.map((part) => ({ ...part, imageDataUrls: undefined })) })),
+        chatModel: p.chatModel,
+      };
+      saveProjectToDb(persisted).catch((err) => console.error("Failed to save project:", err));
+    }
+    setPersistedActiveProjectId(state.activeProjectId);
+  }, 600);
+}
+
+if (typeof window !== "undefined") {
+  useMonkeStore.subscribe((state, prev) => {
+    if (!state.hydrated) return; // don't stomp saved data with pre-hydration defaults
+    if (
+      state.projects !== prev.projects ||
+      state.activeProjectId !== prev.activeProjectId ||
+      state.projectName !== prev.projectName ||
+      state.folderHandle !== prev.folderHandle ||
+      state.timeline !== prev.timeline ||
+      state.settings !== prev.settings ||
+      state.messages !== prev.messages ||
+      state.chatModel !== prev.chatModel
+    ) {
+      schedulePersist(state);
+    }
+  });
+}
+
+// --- Hydration ----------------------------------------------------------
+// Call once on app mount (after auth succeeds). Loads any saved projects
+// from IndexedDB, restores them into the store, and — for the active
+// project — attempts a silent folder re-scan if permission is still
+// granted (it often is, within the same browser profile).
+export async function hydrateMonkeStore(): Promise<void> {
+  if (typeof window === "undefined") return;
+  try {
+    const persisted = await loadAllProjectsFromDb();
+    if (persisted.length === 0) {
+      useMonkeStore.setState({ hydrated: true });
+      return;
+    }
+    const projects: Project[] = persisted.map((p) => ({
+      id: p.id,
+      name: p.name,
+      createdAt: p.createdAt,
+      folderHandle: p.folderHandle,
+      items: [],
+      timeline: p.timeline,
+      settings: p.settings,
+      messages: p.messages,
+      chatModel: p.chatModel,
+    }));
+    const savedActiveId = getPersistedActiveProjectId();
+    const active = projects.find((p) => p.id === savedActiveId) ?? projects[0];
+    useMonkeStore.setState({
+      projects,
+      activeProjectId: active.id,
+      projectName: active.name,
+      folderHandle: active.folderHandle,
+      items: [],
+      timeline: active.timeline,
+      settings: active.settings,
+      messages: active.messages,
+      chatModel: active.chatModel,
+      hydrated: true,
+    });
+    await useMonkeStore.getState().maybeAutoRescan();
+  } catch (err) {
+    console.error("Failed to hydrate from IndexedDB:", err);
+    useMonkeStore.setState({ hydrated: true });
+  }
+}
