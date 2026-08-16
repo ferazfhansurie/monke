@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { FolderOpen, Import, Search, LayoutGrid, Film, Music, Image as ImageIcon } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { openProjectFolder, listMediaHandles, buildMediaItem, isFileSystemAccessSupported } from "@/lib/fs";
@@ -26,6 +26,11 @@ export function MediaLibrary() {
   const projectName = useMonkeStore((s) => s.projectName);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const filteredItems = useMemo(
+    () => (query.trim() ? items.filter((i) => i.name.toLowerCase().includes(query.trim().toLowerCase())) : items),
+    [items, query]
+  );
 
   const importFolder = useCallback(async () => {
     if (!isFileSystemAccessSupported()) {
@@ -112,13 +117,18 @@ export function MediaLibrary() {
       <div className="border-b border-white/10 px-2 py-1.5">
         <div className="flex items-center gap-1.5 rounded-md bg-white/5 px-2 py-1">
           <Search className="h-3 w-3 text-gray-500" />
-          <input placeholder="Search" className="w-full bg-transparent text-[11px] text-gray-300 placeholder:text-gray-600 outline-none" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search"
+            className="w-full bg-transparent text-[11px] text-gray-300 placeholder:text-gray-600 outline-none"
+          />
         </div>
       </div>
 
       <div className="flex items-center justify-between px-2.5 py-2 text-[10px] text-gray-500">
         <span>Library</span>
-        <span>{items.length} items</span>
+        <span>{query.trim() ? `${filteredItems.length} of ${items.length}` : `${items.length} items`}</span>
       </div>
 
       {loadProgress && (
@@ -135,9 +145,13 @@ export function MediaLibrary() {
               {projectName === "Untitled Project" ? "Open a folder of footage to get started." : "No media in this folder yet."}
             </p>
           </div>
+        ) : filteredItems.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+            <p className="text-[11px] text-gray-500">No media matches &ldquo;{query}&rdquo;.</p>
+          </div>
         ) : (
           <div className="grid grid-cols-2 gap-1.5">
-            {items.map((item) => {
+            {filteredItems.map((item) => {
               const Icon = KindIcon[item.kind];
               const isSelected = selectedItemId === item.id;
               return (

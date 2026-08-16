@@ -1,6 +1,7 @@
 "use client";
 
-import { ChevronDown } from "lucide-react";
+import { useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 
 const ASPECT_PRESETS: Record<string, { w: number; h: number }> = {
@@ -19,6 +20,23 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+function Section({ title, defaultOpen = true, children }: { title: string; defaultOpen?: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border-b border-white/10">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-3 py-2.5 text-[11px] font-semibold text-gray-200 hover:bg-white/[0.02] transition-colors"
+      >
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        {title}
+      </button>
+      {open && <div className="px-3 pb-2">{children}</div>}
+    </div>
+  );
+}
+
 export function InspectorPanel() {
   const projectName = useMonkeStore((s) => s.projectName);
   const folderHandle = useMonkeStore((s) => s.folderHandle);
@@ -29,13 +47,8 @@ export function InspectorPanel() {
   const durationSec = timeline.clips.reduce((sum, c) => sum + Math.max(0, c.trimOut - c.trimIn), 0);
 
   return (
-    <div className="flex h-full flex-col border-l border-white/10 bg-[#0d1117] text-gray-300">
-      <div className="border-b border-white/10 px-3 py-2.5">
-        <div className="flex items-center gap-1.5 text-[11px] font-semibold">
-          <ChevronDown className="h-3 w-3" /> Project
-        </div>
-      </div>
-      <div className="border-b border-white/10 px-3 py-2">
+    <div className="flex h-full flex-col overflow-y-auto border-l border-white/10 bg-[#0d1117] text-gray-300">
+      <Section title="Project">
         <Field label="Name">
           <span className="max-w-[140px] truncate text-[11px] text-gray-300">{projectName}</span>
         </Field>
@@ -45,14 +58,9 @@ export function InspectorPanel() {
         <Field label="Duration">
           <span className="text-[11px] text-gray-300">{durationSec.toFixed(1)}s</span>
         </Field>
-      </div>
+      </Section>
 
-      <div className="border-b border-white/10 px-3 py-2.5">
-        <div className="flex items-center gap-1.5 text-[11px] font-semibold">
-          <ChevronDown className="h-3 w-3" /> Settings
-        </div>
-      </div>
-      <div className="px-3 py-2">
+      <Section title="Settings">
         <Field label="Resolution">
           <span className="text-[11px] text-gray-300">
             {settings.resolutionW} × {settings.resolutionH}
@@ -87,7 +95,21 @@ export function InspectorPanel() {
             ))}
           </select>
         </Field>
-      </div>
+      </Section>
+
+      <Section title="Keyboard Shortcuts" defaultOpen={false}>
+        {[
+          ["Space", "Play / pause"],
+          ["S", "Split at playhead"],
+          ["Delete", "Remove selected clip"],
+          ["← / →", "Nudge playhead 1 frame"],
+        ].map(([key, desc]) => (
+          <div key={key} className="flex items-center justify-between py-1">
+            <span className="text-[11px] text-gray-500">{desc}</span>
+            <kbd className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] text-gray-400">{key}</kbd>
+          </div>
+        ))}
+      </Section>
     </div>
   );
 }

@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import type { MediaItem, Timeline, TimelineClip, ProjectSettings, ChatMessage, AuthUser } from "./types";
+import { DEFAULT_CHAT_MODEL } from "./models";
 
 interface MonkeState {
   // Auth
@@ -27,6 +28,7 @@ interface MonkeState {
 
   // Chat
   messages: ChatMessage[];
+  chatModel: string;
 
   // Panels
   theme: "light" | "dark";
@@ -51,6 +53,7 @@ interface MonkeState {
   // impure by the React Compiler; store actions run outside render, so
   // it's the right place for this.
   pushMessage: (role: ChatMessage["role"], parts: ChatMessage["parts"]) => ChatMessage;
+  setChatModel: (id: string) => void;
   setTheme: (t: "light" | "dark") => void;
   reset: () => void;
 }
@@ -75,6 +78,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   isPlaying: false,
   settings: defaultSettings,
   messages: [],
+  chatModel: DEFAULT_CHAT_MODEL,
   theme: "dark",
 
   setUser: (user) => set({ user }),
@@ -147,6 +151,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
     set((s) => ({ messages: [...s.messages, msg] }));
     return msg;
   },
+  setChatModel: (id) => set({ chatModel: id }),
   setTheme: (t) => set({ theme: t }),
   reset: () =>
     set({

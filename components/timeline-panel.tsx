@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Scissors, Trash2, Undo, Redo, ZoomIn, ZoomOut, Type } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import type { useTimelinePlayer } from "@/lib/timeline-player";
@@ -21,6 +21,7 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
   const reorderTimelineClip = useMonkeStore((s) => s.reorderTimelineClip);
   const splitTimelineClip = useMonkeStore((s) => s.splitTimelineClip);
   const addTimelineClip = useMonkeStore((s) => s.addTimelineClip);
+  const frameRate = useMonkeStore((s) => s.settings.frameRate);
 
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [dragging, setDragging] = useState<DragKind>(null);
@@ -106,6 +107,53 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
 
   const clips = [...timeline.clips].sort((a, b) => a.order - b.order);
 
+  const splitAtPlayhead = useCallback(() => {
+    if (!selectedClipId) return;
+    const clip = timeline.clips.find((c) => c.id === selectedClipId);
+    if (!clip) return;
+    const startOffset = player.clips.find((c) => c.id === selectedClipId)?.startOffset ?? 0;
+    const local = Math.max(0.05, player.currentTime - startOffset);
+    const dur = clip.trimOut - clip.trimIn;
+    const newId = splitTimelineClip(selectedClipId, Math.min(dur - 0.05, local));
+    if (newId) setSelectedClipId(newId);
+  }, [selectedClipId, timeline.clips, player.clips, player.currentTime, splitTimelineClip]);
+
+  const deleteSelected = useCallback(() => {
+    if (!selectedClipId) return;
+    removeTimelineClip(selectedClipId);
+    setSelectedClipId(null);
+  }, [selectedClipId, removeTimelineClip]);
+
+  // Standard NLE shortcuts. Ignored while typing in any input/textarea
+  // (chat box included) so "s" for split doesn't eat a keystroke there.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isTyping = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+      if (isTyping) return;
+
+      if (e.code === "Space") {
+        e.preventDefault();
+        if (player.isPlaying) player.pause();
+        else player.play();
+      } else if (e.key === "s" || e.key === "S") {
+        e.preventDefault();
+        splitAtPlayhead();
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        deleteSelected();
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        player.seek(player.currentTime - 1 / frameRate);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        player.seek(player.currentTime + 1 / frameRate);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [player, splitAtPlayhead, deleteSelected, frameRate]);
+
   return (
     <div className="flex h-full flex-col bg-[#0a0c10]">
       <div className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5">
@@ -116,32 +164,14 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
           <Redo className="h-3.5 w-3.5" />
         </button>
         <div className="mx-1 h-4 w-px bg-white/10" />
-        <button
-          type="button"
-          onClick={() => {
-            if (!selectedClipId) return;
-            const clip = timeline.clips.find((c) => c.id === selectedClipId);
-            if (!clip) return;
-            const startOffset = player.clips.find((c) => c.id === selectedClipId)?.startOffset ?? 0;
-            const local = Math.max(0.05, player.currentTime - startOffset);
-            const dur = clip.trimOut - clip.trimIn;
-            const newId = splitTimelineClip(selectedClipId, Math.min(dur - 0.05, local));
-            if (newId) setSelectedClipId(newId);
-          }}
-          className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300"
-          title="Split at playhead"
-        >
+        <button type="button" onClick={splitAtPlayhead} className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300" title="Split at playhead (S)">
           <Scissors className="h-3.5 w-3.5" />
         </button>
         <button
           type="button"
-          onClick={() => {
-            if (!selectedClipId) return;
-            removeTimelineClip(selectedClipId);
-            setSelectedClipId(null);
-          }}
+          onClick={deleteSelected}
           className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300"
-          title="Delete clip"
+          title="Delete clip (Delete)"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>

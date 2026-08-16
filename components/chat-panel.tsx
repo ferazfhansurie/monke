@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, Film, Captions, Mic, Music, FolderTree, Send, Plus, History, Loader2 } from "lucide-react";
+import { Sparkles, Film, Captions, Mic, Music, FolderTree, Send, Plus, History, Loader2, ChevronDown, Check } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
+import { CHAT_MODELS } from "@/lib/models";
 import type { ChatMessage, ChatMessagePart } from "@/lib/types";
 
 const STARTERS = [
@@ -124,8 +125,12 @@ export function ChatPanel() {
   const messages = useMonkeStore((s) => s.messages);
   const pushMessage = useMonkeStore((s) => s.pushMessage);
   const items = useMonkeStore((s) => s.items);
+  const chatModel = useMonkeStore((s) => s.chatModel);
+  const setChatModel = useMonkeStore((s) => s.setChatModel);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const currentModel = CHAT_MODELS.find((m) => m.id === chatModel) ?? CHAT_MODELS[0];
 
   const send = async (text: string) => {
     if (!text.trim() || loading) return;
@@ -139,7 +144,7 @@ export function ChatPanel() {
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: toAnthropicMessages(history), timelineContext: buildTimelineContext() }),
+          body: JSON.stringify({ messages: toAnthropicMessages(history), timelineContext: buildTimelineContext(), model: chatModel }),
         });
         const data = await res.json();
         if (!res.ok) {
@@ -272,7 +277,40 @@ export function ChatPanel() {
             {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
           </button>
         </div>
-        <div className="mt-1.5 px-0.5 text-[10px] text-gray-600">Opus 4.8</div>
+        <div className="relative mt-1.5">
+          <button
+            type="button"
+            onClick={() => setModelMenuOpen((v) => !v)}
+            className="flex items-center gap-1 rounded px-0.5 text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
+          >
+            {currentModel.label}
+            <ChevronDown className="h-2.5 w-2.5" />
+          </button>
+          {modelMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setModelMenuOpen(false)} />
+              <div className="absolute bottom-full left-0 z-50 mb-1 w-56 rounded-lg border border-white/10 bg-[#161b22] py-1 shadow-lg">
+                {CHAT_MODELS.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => {
+                      setChatModel(m.id);
+                      setModelMenuOpen(false);
+                    }}
+                    className="flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-white/5"
+                  >
+                    <Check className={`mt-0.5 h-3 w-3 shrink-0 ${m.id === chatModel ? "text-[#f26522]" : "text-transparent"}`} />
+                    <span>
+                      <span className="block text-[12px] text-gray-200">{m.label}</span>
+                      <span className="block text-[10px] text-gray-500">{m.description}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

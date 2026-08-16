@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { requireUser } from "@/lib/auth";
 import { AGENT_TOOLS } from "@/lib/agent-tools";
+import { DEFAULT_CHAT_MODEL, isValidChatModel } from "@/lib/models";
 
 export const maxDuration = 60;
 
@@ -31,10 +32,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { messages, timelineContext } = await req.json();
+    const { messages, timelineContext, model } = await req.json();
     if (!Array.isArray(messages) || messages.length === 0) {
       return NextResponse.json({ error: "messages is required" }, { status: 400 });
     }
+    const resolvedModel = isValidChatModel(model) ? model : DEFAULT_CHAT_MODEL;
 
     const systemBlocks: Anthropic.TextBlockParam[] = [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }];
     if (typeof timelineContext === "string" && timelineContext.trim()) {
@@ -43,7 +45,7 @@ export async function POST(req: NextRequest) {
 
     const client = getAnthropic();
     const response = await client.messages.create({
-      model: "claude-opus-4-8",
+      model: resolvedModel,
       max_tokens: 4096,
       system: systemBlocks,
       tools: AGENT_TOOLS.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema })),
