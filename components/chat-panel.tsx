@@ -20,12 +20,13 @@ const STARTERS = [
 ];
 
 const MAX_TURNS = 12;
-// Generous enough to cover a first-time Whisper model download (~290MB,
-// can be slow on a bad connection) without false-triggering on ordinary
-// tool calls, while still guaranteeing no single tool dispatch (frame
-// capture waiting on a stuck video 'seeked' event, a hung network call)
-// can leave the whole chat panel stuck "loading" forever with no way out.
-const TOOL_TIMEOUT_MS = 90000;
+// Generous enough to cover a first-time Whisper model download (~250MB in
+// the common q8 case, but up to ~970MB if the browser's WASM backend can't
+// load q8 and falls back to fp32 — see lib/audio.ts) without false-triggering
+// on ordinary tool calls, while still guaranteeing no single tool dispatch
+// (frame capture waiting on a stuck video 'seeked' event, a hung network
+// call) can leave the whole chat panel stuck "loading" forever with no way out.
+const TOOL_TIMEOUT_MS = 240000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return Promise.race([promise, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(message)), ms))]);

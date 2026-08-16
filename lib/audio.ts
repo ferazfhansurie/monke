@@ -12,16 +12,22 @@ let pipelinePromise: Promise<unknown> | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getAsrPipeline(): Promise<any> {
   if (!pipelinePromise) {
-    // fp32, not a quantized dtype: whisper-base's decoder embedding layer
-    // ships 4-bit block-quantized (MatMulNBits) even under the "q8" preset,
-    // and ONNX Runtime Web's WASM backend has a broken Transpose+Dequantize
-    // fusion pass for that op ("TransposeDQWeightsForMatMulNBits Missing
-    // required scale") — it fails to initialize every time, not just
-    // intermittently. fp32 skips quantized ops entirely at the cost of a
-    // larger download (~290MB vs ~140MB) and modestly slower inference.
     pipelinePromise = (async () => {
       const { pipeline } = await import("@huggingface/transformers");
-      return pipeline("automatic-speech-recognition", "Xenova/whisper-base", { dtype: "fp32" });
+      try {
+        // q8 (~250MB total) loads fine on native/Node ONNX backends — but
+        // whisper's decoder embedding layer ships 4-bit block-quantized
+        // (MatMulNBits) even under the "q8" preset, and older ONNX Runtime
+        // Web WASM builds have a broken Transpose+Dequantize fusion pass for
+        // that op ("TransposeDQWeightsForMatMulNBits Missing required
+        // scale"), confirmed failing every time (not intermittent) for the
+        // whisper-base q8 export. Try it first since it's smaller and faster
+        // when it works, and fall back to fp32 (~970MB) if the WASM backend
+        // can't initialize it.
+        return await pipeline("automatic-speech-recognition", "Xenova/whisper-small", { dtype: "q8" });
+      } catch {
+        return await pipeline("automatic-speech-recognition", "Xenova/whisper-small", { dtype: "fp32" });
+      }
     })().catch((err) => {
       // Don't let a failed load poison every future attempt — clear the
       // cache so the next transcribe call gets a fresh try instead of
@@ -31,6 +37,41 @@ async function getAsrPipeline(): Promise<any> {
     });
   }
   return pipelinePromise;
+}
+
+// Transformers.js's ASR pipeline never runs Whisper's own language
+// auto-detection — when no `language` is passed it silently forces English
+// decoding (`_retrieve_init_tokens` warns "No language specified -
+// defaulting to English" and hardcodes "en"). Confirmed against real
+// Manglish/Malay footage: forced-English decoding didn't just get some
+// words wrong, it hallucinated a fully different, fluent-sounding English
+// sentence with no relation to the actual (Malay) audio. Reimplement the
+// one-token forward pass OpenAI's own `model.detect_language()` uses: feed
+// only the <|startoftranscript|> token into the decoder and read back its
+// top-predicted language token, then use that for the real transcription.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function detectLanguage(transcriber: any, samples: Float32Array): Promise<string | undefined> {
+  try {
+    const gc = transcriber.model.generation_config;
+    if (!gc?.is_multilingual) return undefined;
+    const { Tensor } = await import("@huggingface/transformers");
+    const window = samples.subarray(0, Math.min(samples.length, 16000 * 30));
+    const features = await transcriber.processor(window);
+    const decoderInputIds = new Tensor("int64", new BigInt64Array([BigInt(gc.decoder_start_token_id)]), [1, 1]);
+    const out = await transcriber.model.generate({
+      inputs: features.input_features,
+      decoder_input_ids: decoderInputIds,
+      max_new_tokens: 1,
+      num_beams: 1,
+      do_sample: false,
+    });
+    const seq: bigint[][] = out.tolist ? out.tolist() : out;
+    const predictedId = Number(seq[0][seq[0].length - 1]);
+    const langEntry = Object.entries(gc.lang_to_id as Record<string, number>).find(([, id]) => id === predictedId);
+    return langEntry ? langEntry[0].replace(/[<|>]/g, "") : undefined;
+  } catch {
+    return undefined; // fall back to the pipeline's own default rather than failing the transcription
+  }
 }
 
 // Whisper expects raw PCM Float32 samples at 16kHz mono. Web Audio only
@@ -98,7 +139,13 @@ export async function transcribeAudio(item: MediaItem, startSec: number, endSec:
   const slice = samples.subarray(startIdx, endIdx);
 
   const transcriber = await getAsrPipeline();
-  const result = await transcriber(slice, { return_timestamps: true, chunk_length_s: 30, stride_length_s: 5 });
+  const language = await detectLanguage(transcriber, slice);
+  const result = await transcriber(slice, {
+    return_timestamps: true,
+    chunk_length_s: 30,
+    stride_length_s: 5,
+    ...(language ? { language } : {}),
+  });
 
   const rawChunks: Array<{ text: string; timestamp: [number, number | null] }> = result.chunks ?? [];
   const chunks: TranscriptChunk[] = rawChunks.map((c) => ({
