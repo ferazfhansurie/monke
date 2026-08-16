@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import type { MediaItem, Timeline, TimelineClip, ProjectSettings, ChatMessage, AuthUser } from "./types";
 import { DEFAULT_CHAT_MODEL } from "./models";
-import { listMediaHandles, buildMediaItem } from "./fs";
+import { listMediaHandles, buildMediaItem, kindForName } from "./fs";
 import { DEFAULT_PIP_RECT } from "./layer-style";
 import { saveProjectToDb, loadAllProjectsFromDb, getPersistedActiveProjectId, setPersistedActiveProjectId, type PersistedProject } from "./idb";
 
@@ -20,6 +20,13 @@ export interface Project {
   name: string;
   createdAt: string;
   folderHandle: FileSystemDirectoryHandle | null;
+  // Individually-picked files (via Import, not Open Folder) — there's no
+  // directory to re-scan for these, so each file's own handle is kept so
+  // it can be reconnected/rebuilt after a reload, the same way a folder's
+  // contents are. Only ever empty for browsers without the File System
+  // Access API, where "Import" falls back to a plain <input type="file">
+  // that genuinely cannot survive a reload.
+  looseFileHandles: FileSystemFileHandle[];
   items: MediaItem[];
   timeline: Timeline;
   settings: ProjectSettings;
@@ -40,6 +47,7 @@ function newProject(name: string): Project {
     name,
     createdAt: new Date().toISOString(),
     folderHandle: null,
+    looseFileHandles: [],
     items: [],
     timeline: { id: `tl_${Date.now()}`, name: "Timeline 1", clips: [] },
     settings: defaultSettings,
@@ -75,6 +83,7 @@ interface MonkeState {
   // Active project's data, mirrored from `projects` on every switch
   projectName: string;
   folderHandle: FileSystemDirectoryHandle | null;
+  looseFileHandles: FileSystemFileHandle[];
   isLoadingFolder: boolean;
   loadProgress: { done: number; total: number } | null;
   items: MediaItem[];
@@ -111,6 +120,7 @@ interface MonkeState {
   setLoadingFolder: (v: boolean) => void;
   setLoadProgress: (p: { done: number; total: number } | null) => void;
   addItem: (item: MediaItem) => void;
+  addLooseFileHandle: (handle: FileSystemFileHandle) => void;
   removeItem: (id: string) => void;
   selectItem: (id: string | null) => void;
   selectClip: (id: string | null) => void;
@@ -169,6 +179,7 @@ function syncActiveProjectIntoList(s: MonkeState): Project[] {
           ...p,
           name: s.projectName,
           folderHandle: s.folderHandle,
+          looseFileHandles: s.looseFileHandles,
           items: s.items,
           timeline: s.timeline,
           settings: s.settings,
@@ -185,6 +196,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   activeProjectId: initialProject.id,
   projectName: initialProject.name,
   folderHandle: null,
+  looseFileHandles: [],
   isLoadingFolder: false,
   loadProgress: null,
   items: [],
@@ -219,12 +231,14 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       const affectedClips = s.timeline.clips.some((c) => c.mediaId === id);
       return {
         items: s.items.filter((i) => i.id !== id),
+        looseFileHandles: removed ? s.looseFileHandles.filter((h) => h.name !== removed.name) : s.looseFileHandles,
         selectedItemId: s.selectedItemId === id ? null : s.selectedItemId,
         timelineUndoStack: affectedClips ? [...s.timelineUndoStack.slice(-49), s.timeline.clips] : s.timelineUndoStack,
         timelineRedoStack: affectedClips ? [] : s.timelineRedoStack,
         timeline: affectedClips ? { ...s.timeline, clips: s.timeline.clips.filter((c) => c.mediaId !== id) } : s.timeline,
       };
     }),
+  addLooseFileHandle: (handle) => set((s) => ({ looseFileHandles: [...s.looseFileHandles.filter((h) => h.name !== handle.name), handle] })),
   selectItem: (id) => set({ selectedItemId: id }),
   selectClip: (id) => set({ selectedClipId: id }),
 
@@ -327,26 +341,34 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       },
     })),
 
-  // Re-lists the active project's saved folder and rebuilds the media
-  // library from it — used after hydration (folder permission still
-  // granted) and after reconnectFolder() regrants it. Media ids are
-  // deterministic from filename, so a persisted Timeline's clips still
-  // resolve against the freshly rebuilt items.
+  // Rebuilds the whole media library from every known source: the saved
+  // folder (if any) plus every individually-imported file handle. Used
+  // after hydration (permission still granted) and after reconnectFolder()
+  // regrants it. Media ids are deterministic from filename, so a
+  // persisted Timeline's clips still resolve against the freshly rebuilt
+  // items. Per-handle failures (permission still not granted, file moved)
+  // are skipped rather than aborting the whole rebuild — whatever IS
+  // reachable still shows up.
   rescanFolder: async () => {
-    const dir = get().folderHandle;
-    if (!dir) return;
+    const s = get();
+    if (!s.folderHandle && s.looseFileHandles.length === 0) return;
     set({ isLoadingFolder: true, items: [] });
     try {
-      const handles = await listMediaHandles(dir);
-      set({ loadProgress: { done: 0, total: handles.length } });
-      for (let i = 0; i < handles.length; i++) {
-        const item = await buildMediaItem(handles[i].handle, handles[i].kind);
-        set((s) => ({ items: [...s.items, item] }));
-        set({ loadProgress: { done: i + 1, total: handles.length } });
+      const folderHandles = s.folderHandle ? await listMediaHandles(s.folderHandle).catch(() => []) : [];
+      const looseHandles = s.looseFileHandles
+        .map((handle) => ({ handle, kind: kindForName(handle.name) }))
+        .filter((h): h is { handle: FileSystemFileHandle; kind: NonNullable<ReturnType<typeof kindForName>> } => h.kind !== null);
+      const allHandles = [...folderHandles, ...looseHandles];
+      set({ loadProgress: { done: 0, total: allHandles.length } });
+      for (let i = 0; i < allHandles.length; i++) {
+        try {
+          const item = await buildMediaItem(allHandles[i].handle, allHandles[i].kind);
+          set((st) => ({ items: [...st.items, item] }));
+        } catch (err) {
+          console.error(`Skipped "${allHandles[i].handle.name}" during rebuild:`, err);
+        }
+        set({ loadProgress: { done: i + 1, total: allHandles.length } });
       }
-      set({ folderNeedsReconnect: false });
-    } catch (err) {
-      console.error("Failed to rescan folder:", err);
     } finally {
       set({ isLoadingFolder: false, loadProgress: null });
     }
@@ -354,28 +376,38 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
 
   // Must run inside a user gesture (button click) — browsers require that
   // to re-grant a File System Access permission that lapsed between
-  // sessions.
+  // sessions. Requests every known handle (folder + loose files) in one
+  // go so a single click covers everything, rather than nagging per-file.
   reconnectFolder: async () => {
-    const dir = get().folderHandle;
-    if (!dir) return;
+    const s = get();
     try {
-      const perm = await dir.requestPermission({ mode: "readwrite" });
-      if (perm === "granted") await get().rescanFolder();
+      if (s.folderHandle) await s.folderHandle.requestPermission({ mode: "readwrite" });
+      for (const handle of s.looseFileHandles) {
+        await handle.requestPermission({ mode: "readwrite" }).catch(() => "denied");
+      }
+      await get().rescanFolder();
+      set({ folderNeedsReconnect: false });
     } catch (err) {
-      console.error("Failed to reconnect folder:", err);
+      console.error("Failed to reconnect:", err);
     }
   },
 
   // Called after switching/creating/hydrating into a project whose items
-  // haven't been loaded yet this session — silently re-scans if permission
-  // is still granted, otherwise flags for a manual reconnect click.
+  // haven't been loaded yet this session — silently re-scans whatever
+  // already has permission, and flags for a manual reconnect click if
+  // anything (folder or a loose file) still needs re-granting.
   maybeAutoRescan: async () => {
     const s = get();
-    if (!s.folderHandle || s.items.length > 0 || s.isLoadingFolder) return;
+    const hasSources = !!s.folderHandle || s.looseFileHandles.length > 0;
+    if (!hasSources || s.items.length > 0 || s.isLoadingFolder) return;
     try {
-      const perm = await s.folderHandle.queryPermission({ mode: "readwrite" });
-      if (perm === "granted") await get().rescanFolder();
-      else set({ folderNeedsReconnect: true });
+      const checks = await Promise.all([
+        s.folderHandle ? s.folderHandle.queryPermission({ mode: "readwrite" }) : Promise.resolve("granted" as const),
+        ...s.looseFileHandles.map((h) => h.queryPermission({ mode: "readwrite" })),
+      ]);
+      const allGranted = checks.every((p) => p === "granted");
+      await get().rescanFolder();
+      set({ folderNeedsReconnect: !allGranted });
     } catch {
       set({ folderNeedsReconnect: true });
     }
@@ -434,6 +466,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         activeProjectId: fresh.id,
         projectName: fresh.name,
         folderHandle: fresh.folderHandle,
+        looseFileHandles: fresh.looseFileHandles,
         items: fresh.items,
         selectedItemId: null,
         selectedClipId: null,
@@ -461,6 +494,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         activeProjectId: id,
         projectName: target.name,
         folderHandle: target.folderHandle,
+        looseFileHandles: target.looseFileHandles,
         items: target.items,
         selectedItemId: null,
         selectedClipId: null,
@@ -517,6 +551,7 @@ async function persistNow(state: MonkeState): Promise<void> {
       name: p.name,
       createdAt: p.createdAt,
       folderHandle: p.folderHandle,
+      looseFileHandles: p.looseFileHandles,
       timeline: p.timeline,
       settings: p.settings,
       messages: p.messages.map((m) => ({ ...m, parts: m.parts.map((part) => ({ ...part, imageDataUrls: undefined })) })),
@@ -525,14 +560,15 @@ async function persistNow(state: MonkeState): Promise<void> {
     try {
       await saveProjectToDb(persisted);
     } catch (err) {
-      // FileSystemDirectoryHandle is spec-cloneable but not every browser
-      // build honors that reliably inside an IndexedDB transaction — if
-      // the write fails with the handle attached, retry without it rather
-      // than losing the whole project (timeline/chat/settings are still
-      // worth keeping; the user just re-clicks Reconnect Folder).
-      console.error("Failed to save project, retrying without folder handle:", err);
+      // FileSystemDirectoryHandle/FileSystemFileHandle are spec-cloneable
+      // but not every browser build honors that reliably inside an
+      // IndexedDB transaction — if the write fails with handles attached,
+      // retry without them rather than losing the whole project
+      // (timeline/chat/settings are still worth keeping; the user just
+      // re-imports the media).
+      console.error("Failed to save project, retrying without file handles:", err);
       try {
-        await saveProjectToDb({ ...persisted, folderHandle: null });
+        await saveProjectToDb({ ...persisted, folderHandle: null, looseFileHandles: [] });
       } catch (err2) {
         console.error("Failed to save project at all:", err2);
       }
@@ -605,6 +641,7 @@ export async function hydrateMonkeStore(): Promise<void> {
       name: p.name,
       createdAt: p.createdAt,
       folderHandle: p.folderHandle,
+      looseFileHandles: p.looseFileHandles ?? [],
       items: [],
       timeline: p.timeline,
       settings: p.settings,
@@ -618,6 +655,7 @@ export async function hydrateMonkeStore(): Promise<void> {
       activeProjectId: active.id,
       projectName: active.name,
       folderHandle: active.folderHandle,
+      looseFileHandles: active.looseFileHandles,
       items: [],
       timeline: active.timeline,
       settings: active.settings,

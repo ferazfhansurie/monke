@@ -18,6 +18,7 @@ export interface PersistedProject {
   name: string;
   createdAt: string;
   folderHandle: FileSystemDirectoryHandle | null;
+  looseFileHandles: FileSystemFileHandle[];
   timeline: Timeline;
   settings: ProjectSettings;
   messages: ChatMessage[];

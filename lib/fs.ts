@@ -10,7 +10,7 @@ export function isFileSystemAccessSupported(): boolean {
   return typeof window !== "undefined" && "showDirectoryPicker" in window;
 }
 
-function kindForName(name: string): MediaKind | null {
+export function kindForName(name: string): MediaKind | null {
   const lower = name.toLowerCase();
   if (VIDEO_EXT.some((ext) => lower.endsWith(ext))) return "video";
   if (AUDIO_EXT.some((ext) => lower.endsWith(ext))) return "audio";
@@ -23,6 +23,35 @@ function kindForName(name: string): MediaKind | null {
 // v2 concern). Nothing is read into memory here beyond directory listing.
 export async function openProjectFolder(): Promise<FileSystemDirectoryHandle> {
   return window.showDirectoryPicker({ id: "monke-project", mode: "readwrite" });
+}
+
+// Individual-file picker via the File System Access API — unlike a plain
+// <input type="file"> (which only ever hands back an in-memory File, gone
+// for good the moment the tab reloads), this returns REAL FileSystemFileHandles
+// that can be stored in IndexedDB and reconnected after a reload, exactly
+// like a folder's contents. Only the <input> fallback path (browsers
+// without FSA) is truly unable to survive a reload — anything picked this
+// way should persist like folder-scanned media does.
+export async function pickFiles(): Promise<{ handle: FileSystemFileHandle; kind: MediaKind }[]> {
+  const handles = await window.showOpenFilePicker({
+    multiple: true,
+    types: [
+      {
+        description: "Media",
+        accept: {
+          "video/*": VIDEO_EXT,
+          "audio/*": AUDIO_EXT,
+          "image/*": IMAGE_EXT,
+        },
+      },
+    ],
+  });
+  const out: { handle: FileSystemFileHandle; kind: MediaKind }[] = [];
+  for (const handle of handles) {
+    const kind = kindForName(handle.name);
+    if (kind) out.push({ handle, kind });
+  }
+  return out;
 }
 
 export async function listMediaHandles(
