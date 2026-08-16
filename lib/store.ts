@@ -90,6 +90,7 @@ interface MonkeState {
   removeTimelineClip: (clipId: string) => void;
   reorderTimelineClip: (clipId: string, order: number) => void;
   splitTimelineClip: (clipId: string, atSeconds: number) => string | null;
+  buildSequence: (clips: { mediaId: string; trimIn: number; trimOut: number }[]) => void;
   undoTimeline: () => void;
   redoTimeline: () => void;
   setPlayhead: (sec: number) => void;
@@ -222,6 +223,25 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
     });
     return newClipId;
   },
+
+  // Replaces the whole timeline in one shot — the efficient path for an
+  // agent that's just decided on a cut, instead of N sequential
+  // addTimelineClip round-trips.
+  buildSequence: (clips) =>
+    set((s) => ({
+      timelineUndoStack: [...s.timelineUndoStack.slice(-49), s.timeline.clips],
+      timelineRedoStack: [],
+      timeline: {
+        ...s.timeline,
+        clips: clips.map((c, i) => ({
+          id: `clip_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 8)}`,
+          mediaId: c.mediaId,
+          trimIn: c.trimIn,
+          trimOut: c.trimOut,
+          order: i,
+        })),
+      },
+    })),
 
   undoTimeline: () =>
     set((s) => {

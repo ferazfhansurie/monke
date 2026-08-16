@@ -5,6 +5,7 @@ import { Sparkles, Film, Captions, Mic, Music, FolderTree, Send, Plus, History, 
 import { useMonkeStore } from "@/lib/store";
 import { CHAT_MODELS } from "@/lib/models";
 import { captureFrames } from "@/lib/fs";
+import { Markdown } from "./markdown";
 import type { ChatMessage, ChatMessagePart } from "@/lib/types";
 
 const STARTERS = [
@@ -16,7 +17,7 @@ const STARTERS = [
   { icon: FolderTree, label: "Organize my media into structured folders" },
 ];
 
-const MAX_TURNS = 8;
+const MAX_TURNS = 12;
 
 // Anthropic tool_use.input arrives as unknown JSON — narrow it per-tool
 // before use so a malformed call fails loudly instead of silently no-op-ing.
@@ -85,6 +86,26 @@ interface ToolResult {
 async function dispatchTool(name: string, input: Record<string, unknown>): Promise<ToolResult> {
   const store = useMonkeStore.getState();
   try {
+    if (name === "timeline_build_sequence") {
+      const clipsInput = input["clips"];
+      if (!Array.isArray(clipsInput) || clipsInput.length === 0) {
+        return { ok: false, message: "clips must be a non-empty array." };
+      }
+      const resolved: { mediaId: string; trimIn: number; trimOut: number }[] = [];
+      for (const raw of clipsInput) {
+        if (typeof raw !== "object" || raw === null) return { ok: false, message: "Each clip entry must be an object." };
+        const c = raw as Record<string, unknown>;
+        const mediaId = str(c, "media_id");
+        const item = mediaId ? store.items.find((i) => i.id === mediaId) : undefined;
+        if (!item) return { ok: false, message: `No library item with id "${mediaId}".` };
+        const trimIn = num(c, "trim_in") ?? 0;
+        const trimOut = num(c, "trim_out") ?? item.durationSec ?? trimIn + 5;
+        if (trimIn >= trimOut) return { ok: false, message: `trim_in must be less than trim_out for "${item.name}".` };
+        resolved.push({ mediaId: item.id, trimIn, trimOut });
+      }
+      store.buildSequence(resolved);
+      return { ok: true, message: `Built a ${resolved.length}-clip sequence on the timeline.` };
+    }
     if (name === "timeline_probe_clip") {
       const clipId = str(input, "clip_id");
       const mediaIdInput = str(input, "media_id");
@@ -301,7 +322,7 @@ export function ChatPanel() {
                         m.role === "user" ? "bg-[#f26522] text-white" : "border border-white/10 bg-white/[0.03] text-gray-300"
                       }`}
                     >
-                      {p.text}
+                      {m.role === "assistant" ? <Markdown text={p.text ?? ""} /> : p.text}
                     </div>
                   ))}
                   {toolParts.map((p, i) => (

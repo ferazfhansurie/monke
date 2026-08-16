@@ -78,6 +78,30 @@ export const AGENT_TOOLS: AgentTool[] = [
     },
   },
   {
+    name: "timeline_build_sequence",
+    description:
+      "Replace the ENTIRE timeline in one call with an ordered list of clips — the efficient, decisive way to construct or completely re-cut an edit once you've probed the footage and made a decision. Prefer this over many individual timeline_add_clip calls when building a first cut or restructuring the whole sequence.",
+    input_schema: {
+      type: "object",
+      properties: {
+        clips: {
+          type: "array",
+          description: "Ordered list of clips for the new timeline, first to last. This fully replaces whatever is currently on the timeline.",
+          items: {
+            type: "object",
+            properties: {
+              media_id: { type: "string", description: "Library item id, from CURRENT LIBRARY." },
+              trim_in: { type: "number", description: "Start offset into the source, in seconds." },
+              trim_out: { type: "number", description: "End offset into the source, in seconds." },
+            },
+            required: ["media_id", "trim_in", "trim_out"],
+          },
+        },
+      },
+      required: ["clips"],
+    },
+  },
+  {
     name: "timeline_probe_clip",
     description:
       "Capture and view still frames from a clip or library item — this is your ONLY way to see what footage actually shows. Provide clip_id (samples within that timeline clip's trimmed range) or media_id (samples the raw source). By default captures a BURST of consecutive frames at true frame-level spacing (as fine as 0.05s) starting at at_seconds, so you can see motion, not just one static instant. A burst only covers a short window (frame_count * step_seconds) — call the tool again with a later at_seconds to sweep across the rest of a longer clip.",
