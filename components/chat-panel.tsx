@@ -6,6 +6,7 @@ import { useMonkeStore } from "@/lib/store";
 import { CHAT_MODELS } from "@/lib/models";
 import { captureFrames } from "@/lib/fs";
 import { transcribeAudio } from "@/lib/audio";
+import { startVideoGeneration } from "@/lib/generation";
 import { Markdown } from "./markdown";
 import type { ChatMessage, ChatMessagePart, ClipMask, ClipRect } from "@/lib/types";
 
@@ -140,6 +141,23 @@ async function dispatchTool(name: string, input: Record<string, unknown>): Promi
       }
       store.buildSequence(resolved);
       return { ok: true, message: `Built a ${resolved.length}-clip sequence on the timeline.` };
+    }
+    if (name === "generate_stock_clip") {
+      const prompt = str(input, "prompt");
+      if (!prompt) return { ok: false, message: "prompt is required" };
+      const durationSec = num(input, "duration_seconds");
+      const resolution = str(input, "resolution") as "480p" | "720p" | "1080p" | undefined;
+      const aspectRatio = str(input, "aspect_ratio");
+      try {
+        const { requestId } = await startVideoGeneration(prompt, { durationSec, resolution, aspectRatio });
+        store.addPendingGeneration(requestId, prompt);
+        return {
+          ok: true,
+          message: `Started generating "${prompt}" (takes about 2 minutes). It'll be auto-imported into the library and announced in chat when ready — no need to check back.`,
+        };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "Failed to start generation" };
+      }
     }
     if (name === "timeline_transcribe_clip") {
       const clipId = str(input, "clip_id");

@@ -50,6 +50,18 @@ function newProject(name: string): Project {
 
 const initialProject = newProject("Untitled Project");
 
+// A generation job in flight (text-to-video, e.g. stock b-roll) — session
+// only, not persisted/synced per-project. Generation takes ~2 minutes,
+// tracked here so a background poller component can check on it and, on
+// completion, import the result and notify in chat without blocking any
+// single chat turn (which has its own much shorter time budget).
+export interface PendingGeneration {
+  id: string;
+  requestId: string;
+  prompt: string;
+  startedAt: string;
+}
+
 interface MonkeState {
   // Auth
   user: AuthUser | null;
@@ -86,6 +98,9 @@ interface MonkeState {
   // hasn't (yet) granted permission back to it this session — the user has
   // to click to re-grant (browsers require a user gesture for this).
   folderNeedsReconnect: boolean;
+
+  // In-flight generation jobs — session-only, not persisted.
+  pendingGenerations: PendingGeneration[];
 
   // Panels
   theme: "light" | "dark";
@@ -139,6 +154,8 @@ interface MonkeState {
   createProject: () => void;
   switchProject: (id: string) => void;
   setTheme: (t: "light" | "dark") => void;
+  addPendingGeneration: (requestId: string, prompt: string) => string;
+  removePendingGeneration: (id: string) => void;
   reset: () => void;
 }
 
@@ -183,6 +200,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   timelineRedoStack: [],
   hydrated: false,
   folderNeedsReconnect: false,
+  pendingGenerations: [],
   theme: "dark",
 
   setUser: (user) => set({ user }),
@@ -461,6 +479,12 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   },
 
   setTheme: (t) => set({ theme: t }),
+  addPendingGeneration: (requestId, prompt) => {
+    const id = `gen_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    set((s) => ({ pendingGenerations: [...s.pendingGenerations, { id, requestId, prompt, startedAt: new Date().toISOString() }] }));
+    return id;
+  },
+  removePendingGeneration: (id) => set((s) => ({ pendingGenerations: s.pendingGenerations.filter((g) => g.id !== id) })),
   reset: () =>
     set({
       projectName: "Untitled Project",

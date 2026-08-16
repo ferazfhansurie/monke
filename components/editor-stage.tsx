@@ -7,6 +7,7 @@ import { MediaLibrary } from "./media-library";
 import { PreviewPlayer } from "./preview-player";
 import { InspectorPanel } from "./inspector-panel";
 import { TimelinePanel } from "./timeline-panel";
+import { GenerationPoller } from "./generation-poller";
 import { useTimelinePlayer } from "@/lib/timeline-player";
 
 // Owns the single shared playback engine (video element refs +
@@ -21,6 +22,7 @@ export function EditorStage() {
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#0a0c10] text-gray-100">
+      <GenerationPoller />
       <TopBar />
       <div className="flex min-h-0 flex-1">
         <div className="flex w-[320px] shrink-0 flex-col">

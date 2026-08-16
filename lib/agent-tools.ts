@@ -157,6 +157,21 @@ export const AGENT_TOOLS: AgentTool[] = [
     },
   },
   {
+    name: "generate_stock_clip",
+    description:
+      "Generate a short stock-style video clip from a text description (e.g. 'an airplane flying through clouds') when the user needs footage they don't have and there's no way to get it from their own files — this is the ONLY legitimate way to add footage that doesn't already exist in the library; never suggest or attempt to download footage from YouTube, Google, or any other website (copyright/ToS violations). Generation costs real money and takes roughly 2 minutes — it does NOT complete within this tool call. Call this once, tell the user it's started and you'll let them know when it's ready, and continue the conversation normally. The clip will be automatically imported into their library and announced in chat when done — don't poll or ask about it yourself.",
+    input_schema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "A clear visual description of the desired clip, e.g. 'a commercial airplane flying through white clouds, blue sky, seen from below'." },
+        duration_seconds: { type: "number", description: "4-15, default 5." },
+        resolution: { type: "string", enum: ["480p", "720p", "1080p"], description: "Default 720p." },
+        aspect_ratio: { type: "string", description: "e.g. '9:16' or '16:9'. Default '9:16' (match the project's vertical default unless the user's project is landscape)." },
+      },
+      required: ["prompt"],
+    },
+  },
+  {
     name: "timeline_probe_clip",
     description:
       "Capture and view still frames from a clip or library item — this is your ONLY way to see what footage actually shows. Provide clip_id (samples within that timeline clip's trimmed range) or media_id (samples the raw source). By default captures a BURST of consecutive frames at true frame-level spacing (as fine as 0.05s) starting at at_seconds, so you can see motion, not just one static instant. A burst only covers a short window (frame_count * step_seconds) — call the tool again with a later at_seconds to sweep across the rest of a longer clip.",
