@@ -94,6 +94,7 @@ interface MonkeState {
   setLoadingFolder: (v: boolean) => void;
   setLoadProgress: (p: { done: number; total: number } | null) => void;
   addItem: (item: MediaItem) => void;
+  removeItem: (id: string) => void;
   selectItem: (id: string | null) => void;
   addTimelineClip: (mediaId: string, opts?: { trimIn?: number; trimOut?: number; order?: number }) => string;
   updateTimelineClip: (clipId: string, patch: Partial<Pick<TimelineClip, "trimIn" | "trimOut" | "order">>) => void;
@@ -170,6 +171,23 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   setLoadingFolder: (v) => set({ isLoadingFolder: v }),
   setLoadProgress: (p) => set({ loadProgress: p }),
   addItem: (item) => set((s) => ({ items: [...s.items, item] })),
+  // Cascades: any timeline clips referencing this media are removed too
+  // (a clip pointing at a deleted item is just broken, not useful to keep
+  // around), pushed onto the undo stack like any other timeline mutation.
+  removeItem: (id) =>
+    set((s) => {
+      const removed = s.items.find((i) => i.id === id);
+      if (removed?.objectUrl) URL.revokeObjectURL(removed.objectUrl);
+      if (removed?.thumbnailUrl && removed.thumbnailUrl !== removed.objectUrl) URL.revokeObjectURL(removed.thumbnailUrl);
+      const affectedClips = s.timeline.clips.some((c) => c.mediaId === id);
+      return {
+        items: s.items.filter((i) => i.id !== id),
+        selectedItemId: s.selectedItemId === id ? null : s.selectedItemId,
+        timelineUndoStack: affectedClips ? [...s.timelineUndoStack.slice(-49), s.timeline.clips] : s.timelineUndoStack,
+        timelineRedoStack: affectedClips ? [] : s.timelineRedoStack,
+        timeline: affectedClips ? { ...s.timeline, clips: s.timeline.clips.filter((c) => c.mediaId !== id) } : s.timeline,
+      };
+    }),
   selectItem: (id) => set({ selectedItemId: id }),
 
   addTimelineClip: (mediaId, opts) => {

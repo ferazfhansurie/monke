@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { FolderOpen, Import, Search, LayoutGrid, Film, Music, Image as ImageIcon, RefreshCw } from "lucide-react";
+import { FolderOpen, Import, Search, LayoutGrid, Film, Music, Image as ImageIcon, RefreshCw, Trash2 } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { openProjectFolder, listMediaHandles, buildMediaItem, isFileSystemAccessSupported } from "@/lib/fs";
 
@@ -17,6 +17,7 @@ export function MediaLibrary() {
   const selectedItemId = useMonkeStore((s) => s.selectedItemId);
   const selectItem = useMonkeStore((s) => s.selectItem);
   const addItem = useMonkeStore((s) => s.addItem);
+  const removeItem = useMonkeStore((s) => s.removeItem);
   const addTimelineClip = useMonkeStore((s) => s.addTimelineClip);
   const setFolder = useMonkeStore((s) => s.setFolder);
   const isLoadingFolder = useMonkeStore((s) => s.isLoadingFolder);
@@ -188,12 +189,22 @@ export function MediaLibrary() {
                   type="button"
                   onClick={() => selectItem(item.id)}
                   onDoubleClick={() => item.kind === "video" && addTimelineClip(item.id, { trimIn: 0, trimOut: item.durationSec })}
+                  onContextMenu={(e) => {
+                    // Replace the browser's native context menu with the
+                    // one useful action we have here — there was no way to
+                    // remove a library item before this, so right-click
+                    // just fell through to Chrome's Back/Reload/Print menu.
+                    e.preventDefault();
+                    if (window.confirm(`Remove "${item.name}" from the library? Any timeline clips using it will be removed too.`)) {
+                      removeItem(item.id);
+                    }
+                  }}
                   draggable
                   onDragStart={(e) => e.dataTransfer.setData("application/monke-media-id", item.id)}
                   className={`group relative aspect-video overflow-hidden rounded-md border ${
                     isSelected ? "border-[#f26522]" : "border-white/10 hover:border-white/25"
                   } bg-black text-left`}
-                  title={`${item.name}${item.kind === "video" ? " — double-click to add to timeline" : ""}`}
+                  title={`${item.name}${item.kind === "video" ? " — double-click to add to timeline, right-click to remove" : " — right-click to remove"}`}
                 >
                   {item.thumbnailUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -203,6 +214,20 @@ export function MediaLibrary() {
                       <Icon className="h-5 w-5 text-gray-600" />
                     </div>
                   )}
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (window.confirm(`Remove "${item.name}" from the library? Any timeline clips using it will be removed too.`)) {
+                        removeItem(item.id);
+                      }
+                    }}
+                    className="absolute right-1 top-1 hidden rounded bg-black/70 p-1 text-gray-300 hover:bg-red-500/80 hover:text-white group-hover:flex"
+                    title="Remove from library"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </span>
                   {item.durationSec != null && (
                     <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1 text-[9px] font-mono text-white">{fmtDuration(item.durationSec)}</span>
                   )}
