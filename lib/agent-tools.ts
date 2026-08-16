@@ -102,6 +102,20 @@ export const AGENT_TOOLS: AgentTool[] = [
     },
   },
   {
+    name: "timeline_transcribe_clip",
+    description:
+      "Transcribe the spoken audio of a clip or library item — runs speech-to-text locally in the user's browser (no upload). Provide clip_id (transcribes within that timeline clip's trimmed range) or media_id (transcribes the raw source). Returns the full text plus a list of {text, start, end} segments with approximate timestamps in seconds, so you can find roughly where a line lands and cut/trim around it. If the clip has no audio track or is silent, says so plainly instead of erroring.",
+    input_schema: {
+      type: "object",
+      properties: {
+        clip_id: { type: "string", description: "Timeline clip id, from CURRENT TIMELINE. Use this OR media_id." },
+        media_id: { type: "string", description: "Library item id, from CURRENT LIBRARY. Use this OR clip_id." },
+        start_seconds: { type: "number", description: "Optional start offset (same range semantics as clip_id/media_id). Defaults to 0 (or the clip's in-point)." },
+        end_seconds: { type: "number", description: "Optional end offset. Defaults to the full clip/media duration." },
+      },
+    },
+  },
+  {
     name: "timeline_probe_clip",
     description:
       "Capture and view still frames from a clip or library item — this is your ONLY way to see what footage actually shows. Provide clip_id (samples within that timeline clip's trimmed range) or media_id (samples the raw source). By default captures a BURST of consecutive frames at true frame-level spacing (as fine as 0.05s) starting at at_seconds, so you can see motion, not just one static instant. A burst only covers a short window (frame_count * step_seconds) — call the tool again with a later at_seconds to sweep across the rest of a longer clip.",

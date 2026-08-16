@@ -5,6 +5,7 @@ import { Sparkles, Film, Captions, Mic, Music, FolderTree, Send, Plus, History, 
 import { useMonkeStore } from "@/lib/store";
 import { CHAT_MODELS } from "@/lib/models";
 import { captureFrames } from "@/lib/fs";
+import { transcribeAudio } from "@/lib/audio";
 import { Markdown } from "./markdown";
 import type { ChatMessage, ChatMessagePart } from "@/lib/types";
 
@@ -114,6 +115,50 @@ async function dispatchTool(name: string, input: Record<string, unknown>): Promi
       }
       store.buildSequence(resolved);
       return { ok: true, message: `Built a ${resolved.length}-clip sequence on the timeline.` };
+    }
+    if (name === "timeline_transcribe_clip") {
+      const clipId = str(input, "clip_id");
+      const mediaIdInput = str(input, "media_id");
+      let item: (typeof store.items)[number] | undefined;
+      let rangeStart = 0;
+      let rangeEnd = 0;
+      let label = "";
+      if (clipId) {
+        const clip = store.timeline.clips.find((c) => c.id === clipId);
+        if (!clip) return { ok: false, message: `No timeline clip with id "${clipId}".` };
+        item = store.items.find((i) => i.id === clip.mediaId);
+        if (!item) return { ok: false, message: "That clip's source media isn't in the library." };
+        rangeStart = clip.trimIn;
+        rangeEnd = clip.trimOut;
+        label = `clip ${clipId} ("${item.name}")`;
+      } else if (mediaIdInput) {
+        item = store.items.find((i) => i.id === mediaIdInput);
+        if (!item) return { ok: false, message: `No library item with id "${mediaIdInput}".` };
+        rangeStart = 0;
+        rangeEnd = item.durationSec ?? 0;
+        label = `media ${mediaIdInput} ("${item.name}")`;
+      } else {
+        return { ok: false, message: "Provide either clip_id or media_id." };
+      }
+      if (item.kind !== "video" && item.kind !== "audio") {
+        return { ok: false, message: `"${item.name}" is ${item.kind} — no audio to transcribe.` };
+      }
+      const startSeconds = rangeStart + Math.max(0, num(input, "start_seconds") ?? 0);
+      const endSeconds = num(input, "end_seconds") != null ? rangeStart + num(input, "end_seconds")! : rangeEnd;
+      if (endSeconds <= startSeconds) return { ok: false, message: "end_seconds must be after start_seconds." };
+
+      const result = await transcribeAudio(item, startSeconds, endSeconds);
+      if (!result.hasAudioTrack) {
+        return { ok: true, message: `${label} has no usable audio track (silent, or the format isn't decodable in-browser).` };
+      }
+      if (!result.text) {
+        return { ok: true, message: `${label}, ${startSeconds.toFixed(1)}s-${endSeconds.toFixed(1)}s: no speech detected (silence, music-only, or noise).` };
+      }
+      const segmentLines = result.chunks.map((c) => `[${c.start.toFixed(1)}s-${c.end.toFixed(1)}s] ${c.text}`).join("\n");
+      return {
+        ok: true,
+        message: `Transcript of ${label}, ${startSeconds.toFixed(1)}s-${endSeconds.toFixed(1)}s:\n"${result.text}"\n\nSegments:\n${segmentLines}`,
+      };
     }
     if (name === "timeline_probe_clip") {
       const clipId = str(input, "clip_id");
