@@ -245,3 +245,25 @@ export async function buildMediaItem(handle: FileSystemFileHandle, kind: MediaKi
   }
   return base;
 }
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40);
+}
+
+// Wraps a generated clip's data URL as a MediaItem the same way any other
+// library item is represented — a pseudo FileSystemFileHandle backed by an
+// in-memory File (generated clips aren't backed by a real file on disk, so
+// they won't survive a reload the way folder-scanned/imported media does,
+// but everything else about them — playback, trimming, probing — works
+// identically since it all goes through the same MediaItem shape).
+export async function importGeneratedClip(videoDataUrl: string, prompt: string): Promise<MediaItem> {
+  const blob = await (await fetch(videoDataUrl)).blob();
+  const fileName = `generated_${slugify(prompt)}.mp4`;
+  const file = new File([blob], fileName, { type: blob.type || "video/mp4" });
+  const pseudoHandle = { kind: "file" as const, name: fileName, getFile: async () => file } as unknown as FileSystemFileHandle;
+  return buildMediaItem(pseudoHandle, "video");
+}

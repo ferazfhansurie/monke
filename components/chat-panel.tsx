@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Sparkles, Film, Captions, Mic, Music, FolderTree, Send, Plus, History, Loader2, ChevronDown, Check, Square, X } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { CHAT_MODELS } from "@/lib/models";
-import { captureFrames } from "@/lib/fs";
+import { captureFrames, importGeneratedClip } from "@/lib/fs";
 import { transcribeAudio, subscribeAsrStatus } from "@/lib/audio";
 import { startVideoGeneration } from "@/lib/generation";
 import { Markdown } from "./markdown";
@@ -20,13 +20,15 @@ const STARTERS = [
 ];
 
 const MAX_TURNS = 12;
-// Generous enough to cover a first-time Whisper model download (~250MB in
-// the common q8 case, but up to ~970MB if the browser's WASM backend can't
-// load q8 and falls back to fp32 — see lib/audio.ts) without false-triggering
-// on ordinary tool calls, while still guaranteeing no single tool dispatch
+// Sized for the two slowest tool calls: a first-time Whisper model download
+// (~970MB fp32, see lib/audio.ts) and a synchronous Gemini Omni Flash video
+// generation (up to the route's own 300s maxDuration — see
+// app/api/generate/video/route.ts). Kept just under that 300s so the
+// server's own response, success or error, normally wins the race instead
+// of the client giving up first. Also guarantees no single tool dispatch
 // (frame capture waiting on a stuck video 'seeked' event, a hung network
 // call) can leave the whole chat panel stuck "loading" forever with no way out.
-const TOOL_TIMEOUT_MS = 240000;
+const TOOL_TIMEOUT_MS = 290000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return Promise.race([promise, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(message)), ms))]);
@@ -253,14 +255,22 @@ async function dispatchTool(name: string, input: Record<string, unknown>): Promi
       const resolution = str(input, "resolution") as "480p" | "720p" | "1080p" | undefined;
       const aspectRatio = str(input, "aspect_ratio");
       try {
-        const { requestId } = await startVideoGeneration(prompt, { durationSec, resolution, aspectRatio });
-        store.addPendingGeneration(requestId, prompt);
-        return {
-          ok: true,
-          message: `Started generating "${prompt}" (takes about 2 minutes). It'll be auto-imported into the library and announced in chat when ready — no need to check back.`,
-        };
+        const result = await startVideoGeneration(prompt, { durationSec, resolution, aspectRatio });
+        if (result.status === "failed") return { ok: false, message: result.error };
+        if (result.status === "processing") {
+          store.addPendingGeneration(result.requestId, prompt);
+          return {
+            ok: true,
+            message: `Started generating "${prompt}" (takes about 2 minutes). It'll be auto-imported into the library and announced in chat when ready — no need to check back.`,
+          };
+        }
+        // completed — the active provider (Gemini Omni Flash) runs
+        // synchronously, so the finished clip is already here.
+        const item = await importGeneratedClip(result.videoDataUrl, prompt);
+        store.addItem(item);
+        return { ok: true, message: `Generated clip ready — added to your library as **${item.name}** ("${prompt}").` };
       } catch (err) {
-        return { ok: false, message: err instanceof Error ? err.message : "Failed to start generation" };
+        return { ok: false, message: err instanceof Error ? err.message : "Failed to generate" };
       }
     }
     if (name === "timeline_transcribe_clip") {

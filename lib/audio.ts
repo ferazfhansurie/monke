@@ -9,11 +9,11 @@ import type { MediaItem } from "./types";
 
 let pipelinePromise: Promise<unknown> | null = null;
 
-// The whisper-small download (~250-970MB depending on which dtype the
-// browser's WASM backend accepts, see below) can take a couple of minutes
-// on a slow connection. With no visible feedback that just reads as "stuck"
-// — this is a tiny pub-sub so any UI (the chat panel's loading indicator)
-// can show real download progress instead of a generic spinner.
+// The whisper-small fp32 download (~970MB, see below for why it has to be
+// fp32) can take a couple of minutes on a slow connection. With no visible
+// feedback that just reads as "stuck" — this is a tiny pub-sub so any UI
+// (the chat panel's loading indicator) can show real download progress
+// instead of a generic spinner.
 type AsrStatusListener = (message: string | null) => void;
 const asrStatusListeners = new Set<AsrStatusListener>();
 

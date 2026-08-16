@@ -3,19 +3,15 @@
 import { useEffect, useRef } from "react";
 import { useMonkeStore } from "@/lib/store";
 import { checkVideoGenerationStatus } from "@/lib/generation";
-import { buildMediaItem } from "@/lib/fs";
+import { importGeneratedClip } from "@/lib/fs";
 
 const POLL_INTERVAL_MS = 10000;
 
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 40);
-}
-
-// Mounted once at the app root. Generation takes ~2 minutes — far longer
+// Mounted once at the app root. Kept for a provider that submits a job and
+// polls separately (e.g. Ark, dormant since its API key broke) — the active
+// provider (Gemini Omni Flash) runs synchronously and is imported directly
+// from the chat tool call instead, so pendingGenerations normally stays
+// empty and this effect is a no-op. Generation takes ~2 minutes — far longer
 // than any single chat turn's budget — so this polls independently of the
 // chat loop and, on completion, imports the result straight into the
 // library and posts a message, whether or not the user is still watching.
@@ -44,13 +40,9 @@ export function GenerationPoller() {
           }
 
           // completed
-          const blob = await (await fetch(result.videoDataUrl)).blob();
-          const fileName = `generated_${slugify(gen.prompt)}.mp4`;
-          const file = new File([blob], fileName, { type: blob.type || "video/mp4" });
-          const pseudoHandle = { kind: "file" as const, name: fileName, getFile: async () => file } as unknown as FileSystemFileHandle;
-          const item = await buildMediaItem(pseudoHandle, "video");
+          const item = await importGeneratedClip(result.videoDataUrl, gen.prompt);
           addItem(item);
-          pushMessage("assistant", [{ type: "text", text: `🎬 Generated clip ready — added to your library as **${fileName}** ("${gen.prompt}").` }]);
+          pushMessage("assistant", [{ type: "text", text: `🎬 Generated clip ready — added to your library as **${item.name}** ("${gen.prompt}").` }]);
           removePendingGeneration(gen.id);
         } catch (err) {
           pushMessage("assistant", [
