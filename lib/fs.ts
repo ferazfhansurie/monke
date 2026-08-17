@@ -254,16 +254,28 @@ function slugify(text: string): string {
     .slice(0, 40);
 }
 
-// Wraps a generated clip's data URL as a MediaItem the same way any other
-// library item is represented — a pseudo FileSystemFileHandle backed by an
-// in-memory File (generated clips aren't backed by a real file on disk, so
-// they won't survive a reload the way folder-scanned/imported media does,
-// but everything else about them — playback, trimming, probing — works
-// identically since it all goes through the same MediaItem shape).
-export async function importGeneratedClip(videoDataUrl: string, prompt: string): Promise<MediaItem> {
-  const blob = await (await fetch(videoDataUrl)).blob();
-  const fileName = `generated_${slugify(prompt)}.mp4`;
-  const file = new File([blob], fileName, { type: blob.type || "video/mp4" });
+// Wraps a Blob as a MediaItem the same way any other library item is
+// represented — a pseudo FileSystemFileHandle backed by an in-memory File.
+// Shared by importGeneratedClip (fresh generation) and restoreGeneratedClip
+// (rebuilding from a blob persisted in IndexedDB, see lib/store.ts) so both
+// paths produce an identical MediaItem shape.
+async function mediaItemFromBlob(blob: Blob, fileName: string): Promise<MediaItem> {
+  const file = blob instanceof File ? blob : new File([blob], fileName, { type: blob.type || "video/mp4" });
   const pseudoHandle = { kind: "file" as const, name: fileName, getFile: async () => file } as unknown as FileSystemFileHandle;
   return buildMediaItem(pseudoHandle, "video");
+}
+
+export async function importGeneratedClip(videoDataUrl: string, prompt: string): Promise<MediaItem> {
+  const blob = await (await fetch(videoDataUrl)).blob();
+  return mediaItemFromBlob(blob, `generated_${slugify(prompt)}.mp4`);
+}
+
+// Generated clips have no on-disk file to reconnect to after a reload —
+// their bytes are persisted directly (see PersistedGeneratedClip in
+// lib/idb.ts) and rebuilt into a MediaItem the same way as a fresh
+// generation. mediaIdForName is deterministic from the filename, so the
+// rebuilt item gets the same id it had before the reload, and any timeline
+// clip that referenced it still resolves.
+export async function restoreGeneratedClip(blob: Blob, name: string): Promise<MediaItem> {
+  return mediaItemFromBlob(blob, name);
 }

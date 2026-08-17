@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import type { MediaItem, Timeline, TimelineClip, Caption, ProjectSettings, ChatMessage, ChatSession, AuthUser } from "./types";
 import { DEFAULT_CHAT_MODEL } from "./models";
-import { listMediaHandles, buildMediaItem, kindForName } from "./fs";
+import { listMediaHandles, buildMediaItem, kindForName, restoreGeneratedClip } from "./fs";
 import { DEFAULT_PIP_RECT } from "./layer-style";
 import { saveProjectToDb, loadAllProjectsFromDb, getPersistedActiveProjectId, setPersistedActiveProjectId, type PersistedProject } from "./idb";
 
@@ -27,12 +27,23 @@ export interface Project {
   // Access API, where "Import" falls back to a plain <input type="file">
   // that genuinely cannot survive a reload.
   looseFileHandles: FileSystemFileHandle[];
+  // Generated clips (generate_stock_clip) have no on-disk file — their
+  // bytes are kept here so they survive a reload, unlike a handle which
+  // has nothing to reconnect to. See PersistedGeneratedClip in lib/idb.ts.
+  generatedClips: GeneratedClipRecord[];
   items: MediaItem[];
   timeline: Timeline;
   settings: ProjectSettings;
   messages: ChatMessage[];
   chatHistory: ChatSession[];
   chatModel: string;
+}
+
+export interface GeneratedClipRecord {
+  id: string;
+  name: string;
+  blob: Blob;
+  addedAt: string;
 }
 
 const defaultSettings: ProjectSettings = {
@@ -49,6 +60,7 @@ function newProject(name: string): Project {
     createdAt: new Date().toISOString(),
     folderHandle: null,
     looseFileHandles: [],
+    generatedClips: [],
     items: [],
     timeline: { id: `tl_${Date.now()}`, name: "Timeline 1", clips: [], captions: [] },
     settings: defaultSettings,
@@ -99,6 +111,7 @@ interface MonkeState {
   projectName: string;
   folderHandle: FileSystemDirectoryHandle | null;
   looseFileHandles: FileSystemFileHandle[];
+  generatedClips: GeneratedClipRecord[];
   isLoadingFolder: boolean;
   loadProgress: { done: number; total: number } | null;
   items: MediaItem[];
@@ -138,6 +151,10 @@ interface MonkeState {
   setLoadProgress: (p: { done: number; total: number } | null) => void;
   addItem: (item: MediaItem) => void;
   addLooseFileHandle: (handle: FileSystemFileHandle) => void;
+  // Generated clips need their bytes persisted directly (no on-disk file to
+  // reconnect to on reload) — call alongside addItem whenever a clip comes
+  // from generate_stock_clip, not for handle-backed media.
+  addGeneratedClip: (item: MediaItem) => Promise<void>;
   removeItem: (id: string) => void;
   selectItem: (id: string | null) => void;
   selectClip: (id: string | null) => void;
@@ -204,6 +221,7 @@ function syncActiveProjectIntoList(s: MonkeState): Project[] {
           name: s.projectName,
           folderHandle: s.folderHandle,
           looseFileHandles: s.looseFileHandles,
+          generatedClips: s.generatedClips,
           items: s.items,
           timeline: s.timeline,
           settings: s.settings,
@@ -222,6 +240,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   projectName: initialProject.name,
   folderHandle: null,
   looseFileHandles: [],
+  generatedClips: [],
   isLoadingFolder: false,
   loadProgress: null,
   items: [],
@@ -266,6 +285,12 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       };
     }),
   addLooseFileHandle: (handle) => set((s) => ({ looseFileHandles: [...s.looseFileHandles.filter((h) => h.name !== handle.name), handle] })),
+  addGeneratedClip: async (item) => {
+    const blob = await item.handle.getFile();
+    set((s) => ({
+      generatedClips: [...s.generatedClips.filter((g) => g.id !== item.id), { id: item.id, name: item.name, blob, addedAt: item.addedAt }],
+    }));
+  },
   selectItem: (id) => set({ selectedItemId: id }),
   selectClip: (id) => set({ selectedClipId: id }),
   selectCaption: (id) => set({ selectedCaptionId: id }),
@@ -419,7 +444,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   // reachable still shows up.
   rescanFolder: async () => {
     const s = get();
-    if (!s.folderHandle && s.looseFileHandles.length === 0) return;
+    if (!s.folderHandle && s.looseFileHandles.length === 0 && s.generatedClips.length === 0) return;
     set({ isLoadingFolder: true, items: [] });
     try {
       const folderHandles = s.folderHandle ? await listMediaHandles(s.folderHandle).catch(() => []) : [];
@@ -436,6 +461,16 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
           console.error(`Skipped "${allHandles[i].handle.name}" during rebuild:`, err);
         }
         set({ loadProgress: { done: i + 1, total: allHandles.length } });
+      }
+      // Generated clips have no handle to reconnect — rebuild straight from
+      // their persisted bytes instead of a permission-gated file read.
+      for (const g of s.generatedClips) {
+        try {
+          const item = await restoreGeneratedClip(g.blob, g.name);
+          set((st) => ({ items: [...st.items, item] }));
+        } catch (err) {
+          console.error(`Skipped generated clip "${g.name}" during rebuild:`, err);
+        }
       }
     } finally {
       set({ isLoadingFolder: false, loadProgress: null });
@@ -466,7 +501,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   // anything (folder or a loose file) still needs re-granting.
   maybeAutoRescan: async () => {
     const s = get();
-    const hasSources = !!s.folderHandle || s.looseFileHandles.length > 0;
+    const hasSources = !!s.folderHandle || s.looseFileHandles.length > 0 || s.generatedClips.length > 0;
     if (!hasSources || s.items.length > 0 || s.isLoadingFolder) return;
     try {
       const checks = await Promise.all([
@@ -660,6 +695,7 @@ async function persistNow(state: MonkeState): Promise<void> {
       createdAt: p.createdAt,
       folderHandle: p.folderHandle,
       looseFileHandles: p.looseFileHandles,
+      generatedClips: p.generatedClips,
       timeline: p.timeline,
       settings: p.settings,
       messages: stripImages(p.messages),
@@ -702,6 +738,7 @@ function relevantFieldsChanged(state: MonkeState, prev: MonkeState): boolean {
     state.activeProjectId !== prev.activeProjectId ||
     state.projectName !== prev.projectName ||
     state.folderHandle !== prev.folderHandle ||
+    state.generatedClips !== prev.generatedClips ||
     state.timeline !== prev.timeline ||
     state.settings !== prev.settings ||
     state.messages !== prev.messages ||
@@ -752,6 +789,7 @@ export async function hydrateMonkeStore(): Promise<void> {
       createdAt: p.createdAt,
       folderHandle: p.folderHandle,
       looseFileHandles: p.looseFileHandles ?? [],
+      generatedClips: p.generatedClips ?? [],
       items: [],
       // Older persisted records predate captions — default so nothing
       // downstream has to null-check timeline.captions.
@@ -769,6 +807,7 @@ export async function hydrateMonkeStore(): Promise<void> {
       projectName: active.name,
       folderHandle: active.folderHandle,
       looseFileHandles: active.looseFileHandles,
+      generatedClips: active.generatedClips,
       items: [],
       timeline: active.timeline,
       settings: active.settings,

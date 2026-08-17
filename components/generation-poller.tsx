@@ -19,6 +19,7 @@ export function GenerationPoller() {
   const pendingGenerations = useMonkeStore((s) => s.pendingGenerations);
   const removePendingGeneration = useMonkeStore((s) => s.removePendingGeneration);
   const addItem = useMonkeStore((s) => s.addItem);
+  const addGeneratedClip = useMonkeStore((s) => s.addGeneratedClip);
   const pushMessage = useMonkeStore((s) => s.pushMessage);
   const inFlightRef = useRef<Set<string>>(new Set());
 
@@ -42,6 +43,7 @@ export function GenerationPoller() {
           // completed
           const item = await importGeneratedClip(result.videoDataUrl, gen.prompt);
           addItem(item);
+          await addGeneratedClip(item);
           pushMessage("assistant", [{ type: "text", text: `🎬 Generated clip ready — added to your library as **${item.name}** ("${gen.prompt}").` }]);
           removePendingGeneration(gen.id);
         } catch (err) {
@@ -56,7 +58,7 @@ export function GenerationPoller() {
     }, POLL_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [pendingGenerations, removePendingGeneration, addItem, pushMessage]);
+  }, [pendingGenerations, removePendingGeneration, addItem, addGeneratedClip, pushMessage]);
 
   return null;
 }

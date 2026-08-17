@@ -268,6 +268,7 @@ async function dispatchTool(name: string, input: Record<string, unknown>): Promi
         // synchronously, so the finished clip is already here.
         const item = await importGeneratedClip(result.videoDataUrl, prompt);
         store.addItem(item);
+        await store.addGeneratedClip(item);
         return { ok: true, message: `Generated clip ready — added to your library as **${item.name}** ("${prompt}").` };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "Failed to generate" };

@@ -13,12 +13,24 @@ const DB_VERSION = 1;
 const STORE = "projects";
 const ACTIVE_PROJECT_KEY = "monke_active_project_id";
 
+export interface PersistedGeneratedClip {
+  id: string;
+  name: string;
+  blob: Blob;
+  addedAt: string;
+}
+
 export interface PersistedProject {
   id: string;
   name: string;
   createdAt: string;
   folderHandle: FileSystemDirectoryHandle | null;
   looseFileHandles: FileSystemFileHandle[];
+  // Generated clips (generate_stock_clip) have no on-disk file to reconnect
+  // to on reload — unlike folder/loose media, the actual bytes have to be
+  // persisted here directly. Blob is structured-cloneable, so this rides
+  // along in the same IndexedDB record as everything else.
+  generatedClips: PersistedGeneratedClip[];
   timeline: Timeline;
   settings: ProjectSettings;
   messages: ChatMessage[];
