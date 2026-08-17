@@ -19,6 +19,7 @@ interface ResolvedClip {
   mask?: ClipMask;
   volume?: number;
   muted?: boolean;
+  cutout?: boolean;
 }
 
 // Only the base track (trackIndex 0, or unset for clips created before
@@ -47,6 +48,7 @@ function resolveClips(timeline: Timeline, srcForMedia: (mediaId: string) => stri
       mask: c.mask,
       volume: c.volume,
       muted: c.muted,
+      cutout: c.cutout,
     });
     offset += duration;
   }

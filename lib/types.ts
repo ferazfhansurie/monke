@@ -59,6 +59,12 @@ export interface TimelineClip {
   mask?: ClipMask;
   volume?: number; // 0-1, defaults to 1. Overlay clips (trackIndex > 0) default to muted instead — see `muted`.
   muted?: boolean; // defaults to false for base-track clips, true for overlay clips (avoids surprise second audio track under the base clip's own sound)
+  // Person cutout (background removed via ML matting, see lib/segmentation.ts)
+  // is applied for this clip's whole on-screen duration once baked. The
+  // actual per-frame alpha data lives in the store's non-persisted
+  // cutoutFrames map (keyed by this clip's id) — this flag alone survives a
+  // reload, but the baked frames don't, so cutout needs re-baking after one.
+  cutout?: boolean;
 }
 
 // A caption is text, not media — it has no mediaId, sits on its own

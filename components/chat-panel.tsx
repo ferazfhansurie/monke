@@ -6,6 +6,7 @@ import { useMonkeStore } from "@/lib/store";
 import { CHAT_MODELS } from "@/lib/models";
 import { captureFrames, importGeneratedClip } from "@/lib/fs";
 import { transcribeAudio, subscribeAsrStatus } from "@/lib/audio";
+import { bakeCutout, subscribeCutoutStatus } from "@/lib/segmentation";
 import { startVideoGeneration } from "@/lib/generation";
 import { Markdown } from "./markdown";
 import type { ChatMessage, ChatMessagePart, ClipMask, ClipRect } from "@/lib/types";
@@ -318,6 +319,26 @@ async function dispatchTool(name: string, input: Record<string, unknown>): Promi
         message: `Transcript of ${label}, ${startSeconds.toFixed(1)}s-${endSeconds.toFixed(1)}s:\n"${result.text}"\n\nSegments:\n${segmentLines}`,
       };
     }
+    if (name === "timeline_cutout_clip") {
+      const clipId = str(input, "clip_id");
+      if (!clipId) return { ok: false, message: "clip_id is required." };
+      const clip = store.timeline.clips.find((c) => c.id === clipId);
+      if (!clip) return { ok: false, message: `No timeline clip with id "${clipId}".` };
+      const item = store.items.find((i) => i.id === clip.mediaId);
+      if (!item) return { ok: false, message: "That clip's source media isn't in the library." };
+      if (item.kind !== "video") return { ok: false, message: `"${item.name}" is ${item.kind} — cutout only applies to video.` };
+      try {
+        const result = await bakeCutout(item, clip.trimIn, clip.trimOut);
+        store.setCutoutFrames(clip.id, result);
+        store.updateTimelineClip(clip.id, { cutout: true });
+        return {
+          ok: true,
+          message: `Cutout baked for clip ${clipId} ("${item.name}", ${(clip.trimOut - clip.trimIn).toFixed(1)}s) — background removed, composited over whatever's below it on the timeline.`,
+        };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "Cutout failed" };
+      }
+    }
     if (name === "add_captions") {
       const rawCaptions = input["captions"];
       if (!Array.isArray(rawCaptions) || rawCaptions.length === 0) return { ok: false, message: "captions must be a non-empty array." };
@@ -510,6 +531,8 @@ export function ChatPanel() {
   const [loading, setLoading] = useState(false);
   const [asrStatus, setAsrStatus] = useState<string | null>(null);
   useEffect(() => subscribeAsrStatus(setAsrStatus), []);
+  const [cutoutStatus, setCutoutStatus] = useState<string | null>(null);
+  useEffect(() => subscribeCutoutStatus(setCutoutStatus), []);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const currentModel = CHAT_MODELS.find((m) => m.id === chatModel) ?? CHAT_MODELS[0];
@@ -790,7 +813,7 @@ export function ChatPanel() {
             })}
             {loading && (
               <div className="flex items-center gap-1.5 text-[11px] text-gray-500">
-                <Loader2 className="h-3 w-3 animate-spin" /> {asrStatus ?? "Thinking…"}
+                <Loader2 className="h-3 w-3 animate-spin" /> {asrStatus ?? cutoutStatus ?? "Thinking…"}
               </div>
             )}
           </div>

@@ -161,6 +161,18 @@ export const AGENT_TOOLS: AgentTool[] = [
     },
   },
   {
+    name: "timeline_cutout_clip",
+    description:
+      "Cut a person/subject out of a timeline clip's background — real ML-based matting (soft edges, hair detail), not a rectangular crop. Runs entirely in the user's browser and takes real time (roughly 1-2s of processing per second of footage, shown as a progress status, not instant) since it processes every sampled frame in sequence. Once baked, the clip renders with its background removed everywhere it appears, composited over whatever is on the track(s) below it — layer it on track_index 1+ over a background clip/generated plate using timeline_trim_clip's position field if you want it placed somewhere specific in frame, or leave position unset to fill the frame. This does NOT do occlusion (the subject won't appear to go behind foreground objects it wasn't behind in the original shot) or grain/color matching — say so plainly if the user expects that level of compositing. Only cuts out people/subjects against an ordinary background; there's no reason to ask about or mention literal green-screen source footage, this doesn't need any.",
+    input_schema: {
+      type: "object",
+      properties: {
+        clip_id: { type: "string", description: "The timeline clip id, from CURRENT TIMELINE in context. Cutout is baked for exactly this clip's trimmed range." },
+      },
+      required: ["clip_id"],
+    },
+  },
+  {
     name: "generate_stock_clip",
     description:
       "Generate a short stock-style video clip from a text description (e.g. 'an airplane flying through clouds') when the user needs footage they don't have and there's no way to get it from their own files — this is the ONLY legitimate way to add footage that doesn't already exist in the library; never suggest or attempt to download footage from YouTube, Google, or any other website (copyright/ToS violations). Runs on Gemini Omni Flash: 720p only, native audio always on (mention any sound you want directly in the prompt), duration is a TARGET the model may not hit exactly. Generation costs real money and this call blocks until it's done — typically ~1-2 minutes, occasionally longer. REQUIRES confirmed:true — you must present the plan (prompt text, duration, aspect ratio, where it'll be used) as a plain-text message in an EARLIER turn and get the user's explicit go-ahead before calling this with confirmed:true; never plan and call it in the same turn. Once called, tell the user you're generating it now (it finishes within this same tool call, not later) — don't tell them you'll notify them afterward.",

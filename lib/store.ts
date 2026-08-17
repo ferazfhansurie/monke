@@ -141,6 +141,14 @@ interface MonkeState {
   // In-flight generation jobs — session-only, not persisted.
   pendingGenerations: PendingGeneration[];
 
+  // Baked person-cutout alpha frames, keyed by timeline clip id — session
+  // only, deliberately not persisted (a few hundred PNG frames per clip
+  // would bloat IndexedDB substantially for something that's cheap enough
+  // to re-bake). The clip's own `cutout` boolean (persisted, on the clip
+  // itself) survives a reload; the actual matte data doesn't, so it needs
+  // re-baking after one — same trade-off decodedCache makes in lib/audio.ts.
+  cutoutFrames: Record<string, import("./segmentation").CutoutResult>;
+
   // Panels
   theme: "light" | "dark";
 
@@ -176,7 +184,7 @@ interface MonkeState {
   ) => string;
   updateTimelineClip: (
     clipId: string,
-    patch: Partial<Pick<TimelineClip, "trimIn" | "trimOut" | "order" | "trackIndex" | "timelineStart" | "position" | "opacity" | "mask" | "volume" | "muted">>
+    patch: Partial<Pick<TimelineClip, "trimIn" | "trimOut" | "order" | "trackIndex" | "timelineStart" | "position" | "opacity" | "mask" | "volume" | "muted" | "cutout">>
   ) => void;
   removeTimelineClip: (clipId: string) => void;
   reorderTimelineClip: (clipId: string, order: number) => void;
@@ -207,6 +215,8 @@ interface MonkeState {
   setTheme: (t: "light" | "dark") => void;
   addPendingGeneration: (requestId: string, prompt: string) => string;
   removePendingGeneration: (id: string) => void;
+  setCutoutFrames: (clipId: string, result: import("./segmentation").CutoutResult) => void;
+  clearCutoutFrames: (clipId: string) => void;
   reset: () => void;
 }
 
@@ -259,6 +269,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   hydrated: false,
   folderNeedsReconnect: false,
   pendingGenerations: [],
+  cutoutFrames: {},
   theme: "dark",
 
   setUser: (user) => set({ user }),
@@ -657,6 +668,9 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
     return id;
   },
   removePendingGeneration: (id) => set((s) => ({ pendingGenerations: s.pendingGenerations.filter((g) => g.id !== id) })),
+  setCutoutFrames: (clipId, result) => set((s) => ({ cutoutFrames: { ...s.cutoutFrames, [clipId]: result } })),
+  clearCutoutFrames: (clipId) =>
+    set((s) => ({ cutoutFrames: Object.fromEntries(Object.entries(s.cutoutFrames).filter(([id]) => id !== clipId)) })),
   reset: () =>
     set({
       projectName: "Untitled Project",

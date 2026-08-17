@@ -3,7 +3,7 @@
 import { useRef, type CSSProperties, type RefObject } from "react";
 import { Play, Pause, SkipBack, SkipForward, StepBack, StepForward, Maximize2 } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
-import { clipLayerStyle } from "@/lib/layer-style";
+import { clipLayerStyle, cutoutMaskStyle } from "@/lib/layer-style";
 import { OverlayLayer } from "./overlay-layer";
 import { CaptionLayer } from "./caption-layer";
 import type { useTimelinePlayer } from "@/lib/timeline-player";
@@ -27,6 +27,7 @@ interface PreviewPlayerProps {
 // drive the SAME playback engine, not two independent ones.
 export function PreviewPlayer({ player, videoElA, videoElB }: PreviewPlayerProps) {
   const settings = useMonkeStore((s) => s.settings);
+  const cutoutFrames = useMonkeStore((s) => s.cutoutFrames);
   const stageRef = useRef<HTMLDivElement>(null);
 
   const aspect = settings.resolutionW / settings.resolutionH;
@@ -45,7 +46,14 @@ export function PreviewPlayer({ player, videoElA, videoElB }: PreviewPlayerProps
   // set, so plain single-track edits keep their original look exactly.
   const activeClip = player.clips[player.activeClipIndex];
   const hasCustomLayer = !!activeClip && (!!activeClip.position || !!activeClip.mask || activeClip.opacity != null);
-  const activeLayerStyle: CSSProperties | undefined = hasCustomLayer ? clipLayerStyle(activeClip!) : undefined;
+  const activeCutout = activeClip?.cutout ? cutoutFrames[activeClip.id] : undefined;
+  const activeLayerStyle: CSSProperties | undefined =
+    hasCustomLayer || activeCutout
+      ? {
+          ...(hasCustomLayer ? clipLayerStyle(activeClip!) : {}),
+          ...(activeCutout ? cutoutMaskStyle(activeCutout, player.currentTime - activeClip!.startOffset) : {}),
+        }
+      : undefined;
   const slotStyle = (slot: 0 | 1): CSSProperties => (player.activeSlot === slot ? (activeLayerStyle ?? { opacity: 1 }) : { opacity: 0 });
 
   return (

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { useMonkeStore } from "@/lib/store";
-import { clipLayerStyle } from "@/lib/layer-style";
+import { clipLayerStyle, cutoutMaskStyle } from "@/lib/layer-style";
 import type { TimelineClip } from "@/lib/types";
 
 const DRIFT_CORRECTION_SEC = 0.15;
@@ -24,6 +24,7 @@ interface OverlayLayerProps {
 export function OverlayLayer({ masterTime, isPlaying }: OverlayLayerProps) {
   const timeline = useMonkeStore((s) => s.timeline);
   const items = useMonkeStore((s) => s.items);
+  const cutoutFrames = useMonkeStore((s) => s.cutoutFrames);
 
   const activeOverlays = useMemo(() => {
     return timeline.clips
@@ -41,15 +42,37 @@ export function OverlayLayer({ masterTime, isPlaying }: OverlayLayerProps) {
       {activeOverlays.map((clip) => {
         const item = items.find((i) => i.id === clip.mediaId);
         if (!item?.objectUrl) return null;
-        return <OverlayClipVideo key={clip.id} clip={clip} src={item.objectUrl} masterTime={masterTime} isPlaying={isPlaying} />;
+        return (
+          <OverlayClipVideo
+            key={clip.id}
+            clip={clip}
+            src={item.objectUrl}
+            masterTime={masterTime}
+            isPlaying={isPlaying}
+            cutout={clip.cutout ? cutoutFrames[clip.id] : undefined}
+          />
+        );
       })}
     </>
   );
 }
 
-function OverlayClipVideo({ clip, src, masterTime, isPlaying }: { clip: TimelineClip; src: string; masterTime: number; isPlaying: boolean }) {
+function OverlayClipVideo({
+  clip,
+  src,
+  masterTime,
+  isPlaying,
+  cutout,
+}: {
+  clip: TimelineClip;
+  src: string;
+  masterTime: number;
+  isPlaying: boolean;
+  cutout?: import("@/lib/segmentation").CutoutResult;
+}) {
   const ref = useRef<HTMLVideoElement>(null);
-  const localTime = clip.trimIn + Math.max(0, masterTime - (clip.timelineStart ?? 0));
+  const elapsedInClip = Math.max(0, masterTime - (clip.timelineStart ?? 0));
+  const localTime = clip.trimIn + elapsedInClip;
 
   useEffect(() => {
     const el = ref.current;
@@ -71,5 +94,6 @@ function OverlayClipVideo({ clip, src, masterTime, isPlaying }: { clip: Timeline
     return () => el.pause();
   }, [isPlaying]);
 
-  return <video ref={ref} src={src} playsInline style={clipLayerStyle(clip)} />;
+  const style = cutout ? { ...clipLayerStyle(clip), ...cutoutMaskStyle(cutout, elapsedInClip) } : clipLayerStyle(clip);
+  return <video ref={ref} src={src} playsInline style={style} />;
 }

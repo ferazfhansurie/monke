@@ -41,3 +41,28 @@ export function clipLayerStyle(clip: Pick<TimelineClip, "position" | "opacity" |
   if (clip.mask) style.clipPath = maskToClipPath(clip.mask);
   return style;
 }
+
+// Person-cutout compositing (see lib/segmentation.ts) — applies the nearest
+// baked alpha frame for how far into the clip's OWN on-screen time we are
+// (elapsedSec = 0 at the moment the clip starts showing, NOT the source
+// media's absolute time) as a CSS mask over the clip's <video> element, so
+// its own live pixels show through the matte rather than needing a second
+// RGB copy. mask-mode: luminance matches how the alpha frames are encoded
+// (grayscale PNG, white = keep) — the -webkit- fallback covers Safari,
+// which otherwise reads a mask's ALPHA channel by default (always 255 on
+// these PNGs, so without the explicit mode Safari would show the whole
+// frame unmasked).
+export function cutoutMaskStyle(cutout: { dataUrls: string[]; fps: number }, elapsedSec: number): CSSProperties {
+  if (cutout.dataUrls.length === 0) return {};
+  const idx = Math.max(0, Math.min(cutout.dataUrls.length - 1, Math.floor(elapsedSec * cutout.fps)));
+  const url = `url(${cutout.dataUrls[idx]})`;
+  return {
+    maskImage: url,
+    maskMode: "luminance",
+    maskSize: "100% 100%",
+    maskRepeat: "no-repeat",
+    WebkitMaskImage: url,
+    WebkitMaskSize: "100% 100%",
+    WebkitMaskRepeat: "no-repeat",
+  };
+}
