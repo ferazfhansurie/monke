@@ -6,7 +6,7 @@ import { useMonkeStore } from "@/lib/store";
 import { transcribeAudio } from "@/lib/audio";
 import type { useTimelinePlayer } from "@/lib/timeline-player";
 
-type DragKind = "start" | "end" | "reorder" | null;
+type DragKind = "start" | "end" | "reorder" | "scrub" | null;
 
 const BASE_PX_PER_SEC = 40;
 const SNAP_THRESHOLD_PX = 8;
@@ -27,6 +27,42 @@ function snapToNearby(sec: number, targets: number[], pxPerSec: number): number 
     }
   }
   return best;
+}
+
+function fmtRulerTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+// Picks a "nice" tick spacing (seconds) so marks land roughly 60px apart on
+// screen regardless of zoom, instead of a fixed interval that's either a
+// dense unreadable comb when zoomed out or needlessly sparse zoomed in.
+function pickTickInterval(pxPerSec: number): number {
+  const target = 60;
+  for (const candidate of [1, 2, 5, 10, 15, 30, 60, 120, 300]) {
+    if (candidate * pxPerSec >= target) return candidate;
+  }
+  return 600;
+}
+
+// A click or drag anywhere on this strip seeks the playhead there — it's a
+// plain, non-propagation-stopping child of the track container, so the
+// click bubbles up to the container's own onPointerDown (beginScrub) the
+// same way empty track background does. Purely visual otherwise.
+function TimeRuler({ pxPerSec, totalDuration }: { pxPerSec: number; totalDuration: number }) {
+  const interval = pickTickInterval(pxPerSec);
+  const tickCount = Math.max(1, Math.ceil((totalDuration + interval) / interval));
+  const ticks = Array.from({ length: tickCount }, (_, i) => i * interval);
+  return (
+    <div className="relative h-5 cursor-pointer border-b border-white/10">
+      {ticks.map((t) => (
+        <div key={t} className="absolute top-0 bottom-0 border-l border-white/15" style={{ left: t * pxPerSec }}>
+          <span className="absolute left-1 top-0 text-[9px] text-gray-500">{fmtRulerTime(t)}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 interface TimelinePanelProps {
@@ -81,6 +117,30 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
     setDragging(kind);
   };
 
+  const xToSeconds = useCallback(
+    (clientX: number): number => {
+      const rect = trackRef.current?.getBoundingClientRect();
+      if (!rect) return 0;
+      return Math.max(0, Math.min(player.totalDuration, (clientX - rect.left) / pxPerSec));
+    },
+    [pxPerSec, player.totalDuration]
+  );
+
+  // Click (or drag) anywhere on the ruler, or empty track background not
+  // occupied by a clip/caption/overlay box, moves the playhead there —
+  // clips/captions/overlays call stopPropagation on their own pointerdown,
+  // so this only fires for genuinely empty space, never stealing a
+  // select/reorder/trim gesture.
+  const beginScrub = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+      dragClipIdRef.current = null;
+      setDragging("scrub");
+      player.seek(xToSeconds(e.clientX));
+    },
+    [player, xToSeconds]
+  );
+
   const xToOrder = useCallback(
     (clientX: number, draggedClipId: string): number => {
       const rect = trackRef.current?.getBoundingClientRect();
@@ -104,7 +164,12 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
 
   const onTrackPointerMove = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!dragging || !dragClipIdRef.current) return;
+      if (!dragging) return;
+      if (dragging === "scrub") {
+        player.seek(xToSeconds(e.clientX));
+        return;
+      }
+      if (!dragClipIdRef.current) return;
       const rect = trackRef.current?.getBoundingClientRect();
       if (!rect) return;
       const sec = Math.max(0, (e.clientX - rect.left) / pxPerSec);
@@ -144,7 +209,7 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
         reorderTimelineClip(clip.id, xToOrder(e.clientX, clip.id));
       }
     },
-    [dragging, timeline, items, updateTimelineClip, reorderTimelineClip, xToOrder, pxPerSec, player.currentTime]
+    [dragging, timeline, items, updateTimelineClip, reorderTimelineClip, xToOrder, pxPerSec, player, xToSeconds]
   );
 
   const onDropMedia = useCallback(
@@ -332,6 +397,7 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
 
       <div
         ref={trackRef}
+        onPointerDown={beginScrub}
         onPointerMove={onTrackPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
@@ -341,6 +407,7 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
         style={{ touchAction: "none" }}
       >
         <div className="relative flex flex-col gap-1" style={{ width: Math.max(600, player.totalDuration * pxPerSec + 100) }}>
+          <TimeRuler pxPerSec={pxPerSec} totalDuration={player.totalDuration} />
           {timeline.captions.length > 0 && (
             <div className="relative h-8 border-b border-white/5 pb-1">
               {timeline.captions.map((caption) => {
