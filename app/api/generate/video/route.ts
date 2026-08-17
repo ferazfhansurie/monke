@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { requireUser } from "@/lib/auth";
 import { getBillingInfo, creditsForGeneration, deductCredits } from "@/lib/billing";
+import { isAdminEmail } from "@/lib/admin";
 
 export const maxDuration = 300;
 
@@ -22,12 +23,20 @@ export async function POST(req: NextRequest) {
     const user = await requireUser(req);
     if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
+    // The admin account (see lib/admin.ts) pays for Gemini generation
+    // directly via its own GEMINI_API_KEY — MONKe's internal credit ledger
+    // is a markup for other paying customers, not a real cost this account
+    // needs to clear twice. Skip both the gate and the deduction for it.
+    const isAdmin = isAdminEmail(user.email);
+
     const billing = await getBillingInfo(user.id);
-    if (!billing?.subscriptionActive) {
-      return NextResponse.json({ error: "Your MONKe subscription isn't active. Subscribe to generate clips.", code: "subscription_required" }, { status: 402 });
-    }
-    if (billing.credits < creditsForGeneration()) {
-      return NextResponse.json({ error: `Not enough credits for a generation (needs ${creditsForGeneration()}, you have ${billing.credits}). Upgrade or wait for renewal.`, code: "out_of_credits" }, { status: 402 });
+    if (!isAdmin) {
+      if (!billing?.subscriptionActive) {
+        return NextResponse.json({ error: "Your MONKe subscription isn't active. Subscribe to generate clips.", code: "subscription_required" }, { status: 402 });
+      }
+      if (billing.credits < creditsForGeneration()) {
+        return NextResponse.json({ error: `Not enough credits for a generation (needs ${creditsForGeneration()}, you have ${billing.credits}). Upgrade or wait for renewal.`, code: "out_of_credits" }, { status: 402 });
+      }
     }
 
     if (!process.env.GEMINI_API_KEY) {
@@ -79,7 +88,9 @@ export async function POST(req: NextRequest) {
     // Charged only on this success path, same principle the old Ark status
     // route used — nothing is deducted for a generation that didn't
     // actually deliver a video.
-    await deductCredits(user.id, creditsForGeneration());
+    if (!isAdmin) {
+      await deductCredits(user.id, creditsForGeneration());
+    }
 
     return NextResponse.json({ status: "completed", videoDataUrl });
   } catch (err) {
