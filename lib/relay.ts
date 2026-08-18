@@ -23,12 +23,12 @@ export async function detectRelay(): Promise<boolean> {
 }
 
 export interface RelayUsage {
-  todayCostUsd: number;
-  weekCostUsd: number;
-  allTimeCostUsd: number;
-  turnCount: number;
-  weeklyBudgetUsd: number;
-  weeklyBudgetPct: number;
+  /** Percent of the rolling session limit used, per Claude Code's own /usage. */
+  sessionPct: number | null;
+  sessionResets: string | null;
+  weekPct: number | null;
+  weekResets: string | null;
+  fetchedAt: string;
 }
 
 export interface RelayChatResult {

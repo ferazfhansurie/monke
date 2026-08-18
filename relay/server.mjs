@@ -5,7 +5,6 @@
 // Only ever run this yourself, on your own machine; never deploy it.
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { WebSocketServer } from "ws";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -15,51 +14,59 @@ import { SYSTEM_PROMPT } from "../lib/system-prompt.ts";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MONKE_RELAY_PORT) || 8137;
 const MCP_SERVER_PATH = join(__dirname, "mcp-server.mjs");
-const USAGE_LOG_PATH = join(__dirname, ".usage-log.json");
 
-// --- Usage tracking --------------------------------------------------------
-// NOT Anthropic's actual 5hr/weekly rate-limit percentage — that's computed
-// server-side against your real subscription quota and isn't derivable from
-// anything the CLI reports locally. This is a running total of the
-// `total_cost_usd` figure claude -p already returns per turn (dollar-
-// equivalent value, an approximation of usage weight), tracked against a
-// budget YOU set below, not Anthropic's own limit. Persisted to a local
-// file so it survives a relay restart, unlike everything else in this file.
-const WEEKLY_BUDGET_USD = 20;
+// --- Usage --------------------------------------------------------------
+// Real subscription usage, straight from Claude Code's own `/usage` command
+// — the same numbers its VS Code panel shows. Deliberately NOT the earlier
+// approach of reading the OAuth token out of the Keychain and calling
+// undocumented endpoints with a spoofed client User-Agent; this is the
+// documented interface, so it can't break on us or misrepresent the client.
+//
+// Each call costs a little quota, so it's cached. Chat turns invalidate the
+// cache (that's when usage actually moves), and the TTL is only a backstop.
+const USAGE_TTL_MS = 5 * 60 * 1000;
+let usageCache = { at: 0, data: null };
 
-let usageLog = [];
-try {
-  if (existsSync(USAGE_LOG_PATH)) usageLog = JSON.parse(readFileSync(USAGE_LOG_PATH, "utf8"));
-} catch {
-  usageLog = [];
-}
-
-function recordUsage(costUsd) {
-  if (typeof costUsd !== "number" || !Number.isFinite(costUsd)) return;
-  usageLog.push({ ts: Date.now(), costUsd });
-  // Keep the file from growing forever — a year of even heavy personal use
-  // is nowhere near this many turns.
-  if (usageLog.length > 20000) usageLog = usageLog.slice(-20000);
-  try {
-    writeFileSync(USAGE_LOG_PATH, JSON.stringify(usageLog));
-  } catch (err) {
-    console.error("Couldn't persist usage log:", err.message);
-  }
-}
-
-function usageSummary() {
-  const now = Date.now();
-  const DAY_MS = 24 * 60 * 60 * 1000;
-  const sum = (sinceMs) => usageLog.filter((e) => e.ts >= now - sinceMs).reduce((acc, e) => acc + e.costUsd, 0);
-  const weekCostUsd = sum(7 * DAY_MS);
+function parseUsage(text) {
+  const session = text.match(/Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([^(\n]+))?/i);
+  const week = text.match(/Current week[^:]*:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([^(\n]+))?/i);
+  if (!session && !week) return null;
   return {
-    todayCostUsd: sum(DAY_MS),
-    weekCostUsd,
-    allTimeCostUsd: usageLog.reduce((acc, e) => acc + e.costUsd, 0),
-    turnCount: usageLog.length,
-    weeklyBudgetUsd: WEEKLY_BUDGET_USD,
-    weeklyBudgetPct: Math.min(100, Math.round((weekCostUsd / WEEKLY_BUDGET_USD) * 100)),
+    sessionPct: session ? Number(session[1]) : null,
+    sessionResets: session?.[2]?.trim() ?? null,
+    weekPct: week ? Number(week[1]) : null,
+    weekResets: week?.[2]?.trim() ?? null,
+    fetchedAt: new Date().toISOString(),
   };
+}
+
+function fetchUsage() {
+  return new Promise((resolve) => {
+    // Minimal invocation: no MCP, no system prompt, no tools — this is a
+    // status read, and anything extra would cost more quota than it reports.
+    const child = spawn("claude", ["-p", "/usage", "--output-format", "json"], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.on("error", () => resolve(null));
+    child.on("close", () => {
+      try {
+        const parsed = JSON.parse(out.trim().split("\n").pop());
+        resolve(parseUsage(parsed.result ?? ""));
+      } catch {
+        resolve(null);
+      }
+    });
+  });
+}
+
+async function usageSummary({ force = false } = {}) {
+  const fresh = Date.now() - usageCache.at < USAGE_TTL_MS;
+  if (!force && fresh && usageCache.data) return usageCache.data;
+  const data = await fetchUsage();
+  // Keep serving the last good numbers if a refresh fails — a transient
+  // CLI hiccup shouldn't blank the meter.
+  if (data) usageCache = { at: Date.now(), data };
+  return usageCache.data;
 }
 
 // Only these origins may talk to the relay — CORS headers alone only stop
@@ -76,22 +83,17 @@ function corsHeaders(origin) {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
-    // Chrome's Private Network Access rules block a public HTTPS page
-    // (monk-editor.vercel.app) from reaching the loopback address space
-    // unless the local server explicitly opts in — without this the
-    // browser refuses the request outright with "Permission was denied for
-    // this request to access the `loopback` address space", before any of
-    // the normal CORS checks matter. Safe here precisely because the
-    // origin allow-list above has already been checked.
+    // Chrome's Private Network Access rules gate a public HTTPS page
+    // reaching the loopback address space; this is the documented opt-in.
     "Access-Control-Allow-Private-Network": "true",
   };
 }
 
 function originAllowed(req) {
   const origin = req.headers.origin;
-  // Non-browser tools (curl, the MCP subprocess's own internal fetch) send
-  // no Origin header at all — allow that; reject only a browser request
-  // from somewhere NOT in the allow-list.
+  // Non-browser callers (curl, the MCP subprocess's own fetch) send no
+  // Origin at all — allow those; reject only a browser request from an
+  // origin that isn't allow-listed.
   return !origin || ALLOWED_ORIGINS.has(origin);
 }
 
@@ -199,7 +201,7 @@ const server = createServer(async (req, res) => {
 
   if (req.method === "GET" && req.url === "/usage") {
     res.writeHead(200, { ...headers, "Content-Type": "application/json" });
-    res.end(JSON.stringify(usageSummary()));
+    res.end(JSON.stringify(await usageSummary()));
     return;
   }
 
@@ -226,7 +228,6 @@ const server = createServer(async (req, res) => {
       }
       const prompt = typeof timelineContext === "string" && timelineContext.trim() ? `${timelineContext}\n\n${message}` : message;
       const result = await runClaude({ prompt, sessionId: typeof sessionId === "string" ? sessionId : undefined });
-      recordUsage(result.total_cost_usd);
       res.writeHead(200, { ...headers, "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
@@ -234,7 +235,7 @@ const server = createServer(async (req, res) => {
           sessionId: result.session_id,
           isError: !!result.is_error,
           costUsd: result.total_cost_usd,
-          usage: usageSummary(),
+          usage: await usageSummary({ force: true }),
         })
       );
     } catch (err) {

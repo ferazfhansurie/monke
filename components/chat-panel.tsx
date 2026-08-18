@@ -784,18 +784,32 @@ export function ChatPanel() {
         <div className="flex-1" />
         {relayAvailable && relayUsage && (
           <div
-            className="flex items-center gap-1"
-            title={`Running total of claude -p's own reported cost, tracked against a soft weekly budget you set (not Anthropic's actual rate-limit window) — today: $${relayUsage.todayCostUsd.toFixed(2)}, all-time: $${relayUsage.allTimeCostUsd.toFixed(2)}`}
+            className="flex items-center gap-2"
+            title={[
+              relayUsage.sessionPct != null ? `Session: ${relayUsage.sessionPct}% used${relayUsage.sessionResets ? ` · resets ${relayUsage.sessionResets}` : ""}` : null,
+              relayUsage.weekPct != null ? `Week: ${relayUsage.weekPct}% used${relayUsage.weekResets ? ` · resets ${relayUsage.weekResets}` : ""}` : null,
+              "Your real Claude subscription limits, from Claude Code's own /usage.",
+            ]
+              .filter(Boolean)
+              .join("\n")}
           >
-            <div className="h-1.5 w-16 overflow-hidden rounded-full bg-white/10">
-              <div
-                className={`h-full rounded-full ${relayUsage.weeklyBudgetPct >= 90 ? "bg-red-500" : relayUsage.weeklyBudgetPct >= 70 ? "bg-amber-500" : "bg-[#f26522]"}`}
-                style={{ width: `${relayUsage.weeklyBudgetPct}%` }}
-              />
-            </div>
-            <span className="text-[9px] text-gray-500">
-              ${relayUsage.weekCostUsd.toFixed(2)}/${relayUsage.weeklyBudgetUsd}
-            </span>
+            {([
+              { label: "session", pct: relayUsage.sessionPct },
+              { label: "week", pct: relayUsage.weekPct },
+            ] as const).map(({ label, pct }) =>
+              pct == null ? null : (
+                <span key={label} className="flex items-center gap-1">
+                  <span className="text-[9px] text-gray-600">{label}</span>
+                  <span className="h-1.5 w-10 overflow-hidden rounded-full bg-white/10">
+                    <span
+                      className={`block h-full rounded-full ${pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-amber-500" : "bg-[#f26522]"}`}
+                      style={{ width: `${Math.min(100, pct)}%` }}
+                    />
+                  </span>
+                  <span className="text-[9px] text-gray-500">{pct}%</span>
+                </span>
+              )
+            )}
           </div>
         )}
         <button
