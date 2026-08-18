@@ -46,6 +46,16 @@ export interface GeneratedClipRecord {
   addedAt: string;
 }
 
+// What opening a folder actually did — surfaced in the UI so a project
+// switch is never invisible. "resumed" is the VSCode-like case: this exact
+// folder was already a project, so its timeline AND chat history come back
+// with it.
+export type OpenFolderOutcome =
+  | { action: "resumed"; projectName: string; pastConversations: number; hasLiveConversation: boolean }
+  | { action: "rescanned"; projectName: string }
+  | { action: "attached"; projectName: string }
+  | { action: "created"; projectName: string };
+
 const defaultSettings: ProjectSettings = {
   resolutionW: 1080,
   resolutionH: 1920,
@@ -213,6 +223,7 @@ interface MonkeState {
   createProject: () => void;
   switchProject: (id: string) => void;
   findProjectByFolder: (dir: FileSystemDirectoryHandle) => Promise<string | null>;
+  openFolder: (dir: FileSystemDirectoryHandle) => Promise<OpenFolderOutcome>;
   setTheme: (t: "light" | "dark") => void;
   addPendingGeneration: (requestId: string, prompt: string) => string;
   removePendingGeneration: (id: string) => void;
@@ -613,6 +624,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         projectName: fresh.name,
         folderHandle: fresh.folderHandle,
         looseFileHandles: fresh.looseFileHandles,
+        generatedClips: fresh.generatedClips,
         items: fresh.items,
         selectedItemId: null,
         selectedClipId: null,
@@ -682,6 +694,81 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       }
     }
     return null;
+  },
+
+  // The whole "Open Folder" decision, in one place. Previously this just did
+  // setFolder() unconditionally, which meant opening ANY new folder renamed
+  // the currently-active project and attached the new media to it while
+  // keeping the old project's timeline and chat — silently merging two
+  // unrelated pieces of work. Mirrors how an editor treats opening a
+  // workspace instead: a known folder reopens ITS project (timeline + chat
+  // history included), a new folder gets its own.
+  openFolder: async (dir) => {
+    const existingId = await get().findProjectByFolder(dir);
+
+    if (existingId) {
+      if (existingId !== get().activeProjectId) {
+        get().switchProject(existingId); // also triggers maybeAutoRescan
+        const resumed = get();
+        return {
+          action: "resumed",
+          projectName: resumed.projectName,
+          pastConversations: resumed.chatHistory.length,
+          hasLiveConversation: resumed.messages.length > 0,
+        };
+      }
+      // Already the active project — treat as "refresh this folder".
+      await get().rescanFolder();
+      return { action: "rescanned", projectName: get().projectName };
+    }
+
+    // A brand-new folder. Only fold it into the current project if that
+    // project is genuinely untouched (a fresh/empty workspace) — otherwise
+    // give it its own, so existing work is never absorbed into it.
+    const s = get();
+    const currentIsEmpty =
+      !s.folderHandle &&
+      s.looseFileHandles.length === 0 &&
+      s.generatedClips.length === 0 &&
+      s.items.length === 0 &&
+      s.timeline.clips.length === 0 &&
+      s.messages.length === 0 &&
+      s.chatHistory.length === 0;
+
+    if (currentIsEmpty) {
+      set({ folderHandle: dir, projectName: dir.name });
+      await get().rescanFolder();
+      return { action: "attached", projectName: dir.name };
+    }
+
+    set((prev) => {
+      const synced = syncActiveProjectIntoList(prev);
+      const fresh: Project = { ...newProject(dir.name), folderHandle: dir };
+      return {
+        projects: [...synced, fresh],
+        activeProjectId: fresh.id,
+        projectName: fresh.name,
+        folderHandle: fresh.folderHandle,
+        looseFileHandles: fresh.looseFileHandles,
+        generatedClips: fresh.generatedClips,
+        items: fresh.items,
+        selectedItemId: null,
+        selectedClipId: null,
+        selectedCaptionId: null,
+        timeline: fresh.timeline,
+        settings: fresh.settings,
+        messages: fresh.messages,
+        chatHistory: fresh.chatHistory,
+        chatModel: fresh.chatModel,
+        playheadSec: 0,
+        isPlaying: false,
+        timelineUndoStack: [],
+        timelineRedoStack: [],
+        folderNeedsReconnect: false,
+      };
+    });
+    await get().rescanFolder();
+    return { action: "created", projectName: dir.name };
   },
 
   setTheme: (t) => set({ theme: t }),

@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
-import { FolderOpen, Import, Search, LayoutGrid, Film, Music, Image as ImageIcon, RefreshCw, Trash2 } from "lucide-react";
-import { useMonkeStore } from "@/lib/store";
-import { openProjectFolder, listMediaHandles, buildMediaItem, isFileSystemAccessSupported, pickFiles, kindForMimeType, kindForName } from "@/lib/fs";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FolderOpen, Import, Search, LayoutGrid, Film, Music, Image as ImageIcon, RefreshCw, Trash2, History, X } from "lucide-react";
+import { useMonkeStore, type OpenFolderOutcome } from "@/lib/store";
+import { openProjectFolder, buildMediaItem, isFileSystemAccessSupported, pickFiles, kindForMimeType, kindForName } from "@/lib/fs";
 
 function fmtDuration(sec?: number) {
   if (sec == null) return "";
@@ -20,10 +20,7 @@ export function MediaLibrary() {
   const addLooseFileHandle = useMonkeStore((s) => s.addLooseFileHandle);
   const removeItem = useMonkeStore((s) => s.removeItem);
   const addTimelineClip = useMonkeStore((s) => s.addTimelineClip);
-  const setFolder = useMonkeStore((s) => s.setFolder);
-  const findProjectByFolder = useMonkeStore((s) => s.findProjectByFolder);
-  const switchProject = useMonkeStore((s) => s.switchProject);
-  const activeProjectId = useMonkeStore((s) => s.activeProjectId);
+  const openFolder = useMonkeStore((s) => s.openFolder);
   const isLoadingFolder = useMonkeStore((s) => s.isLoadingFolder);
   const setLoadingFolder = useMonkeStore((s) => s.setLoadingFolder);
   const loadProgress = useMonkeStore((s) => s.loadProgress);
@@ -33,6 +30,15 @@ export function MediaLibrary() {
   const reconnectFolder = useMonkeStore((s) => s.reconnectFolder);
   const [reconnecting, setReconnecting] = useState(false);
   const [importWarning, setImportWarning] = useState<string | null>(null);
+  const [openOutcome, setOpenOutcome] = useState<OpenFolderOutcome | null>(null);
+
+  // Auto-dismiss the "what just happened" banner — it's a transient
+  // confirmation, not a persistent state the user has to clear.
+  useEffect(() => {
+    if (!openOutcome) return;
+    const t = setTimeout(() => setOpenOutcome(null), 8000);
+    return () => clearTimeout(t);
+  }, [openOutcome]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
@@ -48,35 +54,17 @@ export function MediaLibrary() {
     }
     try {
       const dir = await openProjectFolder();
-
-      // This exact folder is already the source of a different project —
-      // resume that project (chat history, timeline, everything) instead
-      // of silently attaching the same footage to whatever's active now.
-      const existingProjectId = await findProjectByFolder(dir);
-      if (existingProjectId && existingProjectId !== activeProjectId) {
-        switchProject(existingProjectId);
-        return;
-      }
-
-      setFolder(dir, dir.name);
-      setLoadingFolder(true);
-      const handles = await listMediaHandles(dir);
-      setLoadProgress({ done: 0, total: handles.length });
-      for (let i = 0; i < handles.length; i++) {
-        const item = await buildMediaItem(handles[i].handle, handles[i].kind);
-        addItem(item);
-        setLoadProgress({ done: i + 1, total: handles.length });
-      }
+      // The store owns the whole decision (resume this folder's existing
+      // project vs. give a new folder its own) plus the media rescan — see
+      // openFolder there. Surfaced here so a project switch is never silent.
+      setOpenOutcome(await openFolder(dir));
     } catch (err) {
       // AbortError = user cancelled the picker — not a real failure.
       if (err instanceof Error && err.name !== "AbortError") {
         console.error("Failed to open folder:", err);
       }
-    } finally {
-      setLoadingFolder(false);
-      setLoadProgress(null);
     }
-  }, [setFolder, setLoadingFolder, setLoadProgress, addItem, findProjectByFolder, switchProject, activeProjectId]);
+  }, [openFolder]);
 
   // "Import" (individual files, not a whole folder). Uses the File System
   // Access API's file picker when available — unlike a plain <input
@@ -208,6 +196,37 @@ export function MediaLibrary() {
           <p className="flex-1 text-[10px] text-gray-300">{importWarning}</p>
           <button type="button" onClick={() => setImportWarning(null)} className="shrink-0 text-[10px] text-gray-500 hover:text-gray-300">
             ✕
+          </button>
+        </div>
+      )}
+
+      {openOutcome && (
+        <div className="mx-2 mb-2 flex items-start gap-1.5 rounded-md border border-[#f26522]/30 bg-[#f26522]/5 px-2.5 py-2">
+          <div className="flex-1">
+            {openOutcome.action === "resumed" ? (
+              <>
+                <p className="text-[10px] font-semibold text-gray-200">Resumed “{openOutcome.projectName}”</p>
+                <p className="mt-0.5 flex items-center gap-1 text-[10px] text-gray-400">
+                  <History className="h-2.5 w-2.5 shrink-0" />
+                  {openOutcome.hasLiveConversation ? "Chat restored" : "No live chat"}
+                  {openOutcome.pastConversations > 0
+                    ? ` · ${openOutcome.pastConversations} past conversation${openOutcome.pastConversations === 1 ? "" : "s"} in History`
+                    : ""}
+                </p>
+              </>
+            ) : openOutcome.action === "created" ? (
+              <>
+                <p className="text-[10px] font-semibold text-gray-200">Opened “{openOutcome.projectName}” as a new project</p>
+                <p className="mt-0.5 text-[10px] text-gray-400">Your previous project is still there — switch back from the name at the top left.</p>
+              </>
+            ) : openOutcome.action === "attached" ? (
+              <p className="text-[10px] font-semibold text-gray-200">Opened “{openOutcome.projectName}”</p>
+            ) : (
+              <p className="text-[10px] font-semibold text-gray-200">Refreshed “{openOutcome.projectName}”</p>
+            )}
+          </div>
+          <button type="button" onClick={() => setOpenOutcome(null)} className="shrink-0 text-gray-500 hover:text-gray-300" title="Dismiss">
+            <X className="h-3 w-3" />
           </button>
         </div>
       )}

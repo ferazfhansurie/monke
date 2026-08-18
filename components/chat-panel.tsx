@@ -812,10 +812,17 @@ export function ChatPanel() {
             type="button"
             onClick={() => setHistoryOpen((v) => !v)}
             disabled={chatHistory.length === 0}
-            className="rounded p-1 text-gray-500 hover:bg-white/10 hover:text-gray-300 disabled:opacity-30 disabled:hover:bg-transparent"
-            title={chatHistory.length === 0 ? "No past conversations yet" : "Chat history"}
+            className="flex items-center gap-1 rounded p-1 text-gray-500 hover:bg-white/10 hover:text-gray-300 disabled:opacity-30 disabled:hover:bg-transparent"
+            title={
+              chatHistory.length === 0
+                ? "No past conversations in this project yet"
+                : `${chatHistory.length} past conversation${chatHistory.length === 1 ? "" : "s"} in this project`
+            }
           >
             <History className="h-3.5 w-3.5" />
+            {/* Otherwise a resumed project's past conversations are one
+                unlabeled icon away and read as "my history is gone". */}
+            {chatHistory.length > 0 && <span className="text-[9px] font-semibold text-[#f26522]">{chatHistory.length}</span>}
           </button>
           {historyOpen && chatHistory.length > 0 && (
             <>
