@@ -104,11 +104,33 @@ async function detectLanguage(transcriber: any, samples: Float32Array): Promise<
 // decodes a whole file at once (no partial-range decode), so we decode
 // once per item and cache the resampled track — repeated transcribe calls
 // on the same clip (e.g. different windows) don't re-decode from scratch.
+//
+// Bounded, because this used to grow forever: 16kHz mono float32 is ~3.8MB
+// per minute of audio, so transcribing a session's worth of footage could
+// hold hundreds of MB that nothing ever released — a real contributor to
+// the tab being killed on long sessions. Two entries keeps the actual win
+// (re-transcribing different windows of the SAME clip, which is the common
+// case) without the unbounded growth.
+const MAX_DECODED_CACHE = 2;
 const decodedCache = new Map<string, Float32Array>();
+
+function rememberDecoded(id: string, samples: Float32Array) {
+  // Re-insert to mark as most-recently-used, then drop the oldest.
+  decodedCache.delete(id);
+  decodedCache.set(id, samples);
+  while (decodedCache.size > MAX_DECODED_CACHE) {
+    const oldest = decodedCache.keys().next().value;
+    if (oldest === undefined) break;
+    decodedCache.delete(oldest);
+  }
+}
 
 async function decodeMono16k(item: MediaItem): Promise<Float32Array> {
   const cached = decodedCache.get(item.id);
-  if (cached) return cached;
+  if (cached) {
+    rememberDecoded(item.id, cached); // refresh recency
+    return cached;
+  }
 
   const file = await item.handle.getFile();
   const arrayBuffer = await file.arrayBuffer();
@@ -130,7 +152,7 @@ async function decodeMono16k(item: MediaItem): Promise<Float32Array> {
   const rendered = await offline.startRendering();
   const samples = rendered.getChannelData(0);
 
-  decodedCache.set(item.id, samples);
+  rememberDecoded(item.id, samples);
   return samples;
 }
 

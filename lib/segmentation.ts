@@ -59,7 +59,7 @@ export interface CutoutResult {
   // directly as a CSS mask-image over the clip's own <video> element, so
   // its native pixels show through the matte rather than needing a second
   // copy of the RGB data.
-  dataUrls: string[];
+  frameUrls: string[];
   fps: number;
 }
 
@@ -97,7 +97,13 @@ function frameToTensor(ctx: CanvasRenderingContext2D, width: number, height: num
   return new ort.Tensor("float32", chw, [1, 3, height, width]);
 }
 
-function alphaToDataUrl(pha: ort.Tensor, width: number, height: number): string {
+// Blob URL rather than a base64 data URL. Base64 is ~33% larger than the
+// bytes it encodes AND lives as a JS string on the heap, so a 20s clip at
+// 10fps meant ~200 large strings retained for the whole session — a real
+// contributor to the tab running out of memory. A blob: URL is a short
+// string pointing at bytes the browser owns and we can explicitly release
+// (see releaseCutout).
+function alphaToBlobUrl(pha: ort.Tensor, width: number, height: number): Promise<string> {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -113,7 +119,12 @@ function alphaToDataUrl(pha: ort.Tensor, width: number, height: number): string 
     imageData.data[i * 4 + 3] = 255;
   }
   ctx.putImageData(imageData, 0, 0);
-  return canvas.toDataURL("image/png");
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) return reject(new Error("Couldn't encode the alpha frame"));
+      resolve(URL.createObjectURL(blob));
+    }, "image/png");
+  });
 }
 
 function zeroRecurrentState(): ort.Tensor[] {
@@ -154,7 +165,7 @@ export async function bakeCutout(item: MediaItem, startSec: number, endSec: numb
     const frameCount = Math.max(1, Math.round(duration * sampleFps));
     const downsampleRatio = new ort.Tensor("float32", new Float32Array([DOWNSAMPLE_RATIO]), [1]);
     let rec = zeroRecurrentState();
-    const dataUrls: string[] = [];
+    const frameUrls: string[] = [];
 
     for (let i = 0; i < frameCount; i++) {
       const t = Math.min(endSec - 0.02, startSec + i / sampleFps);
@@ -179,14 +190,22 @@ export async function bakeCutout(item: MediaItem, startSec: number, endSec: numb
         downsample_ratio: downsampleRatio,
       });
       rec = [outputs.r1o, outputs.r2o, outputs.r3o, outputs.r4o];
-      dataUrls.push(alphaToDataUrl(outputs.pha, width, height));
+      frameUrls.push(await alphaToBlobUrl(outputs.pha, width, height));
 
       setCutoutStatus(`Cutting out background — frame ${i + 1}/${frameCount}`);
     }
 
-    return { dataUrls, fps: sampleFps };
+    return { frameUrls, fps: sampleFps };
   } finally {
     URL.revokeObjectURL(url);
     setCutoutStatus(null);
   }
+}
+
+// Frees the browser-held bytes behind a baked matte. Without this the blob
+// URLs would leak for the life of the tab — the same unbounded growth the
+// data URLs had, just moved off the JS heap.
+export function releaseCutout(result: CutoutResult | undefined): void {
+  if (!result) return;
+  for (const url of result.frameUrls) URL.revokeObjectURL(url);
 }

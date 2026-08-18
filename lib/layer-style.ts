@@ -52,10 +52,10 @@ export function clipLayerStyle(clip: Pick<TimelineClip, "position" | "opacity" |
 // which otherwise reads a mask's ALPHA channel by default (always 255 on
 // these PNGs, so without the explicit mode Safari would show the whole
 // frame unmasked).
-export function cutoutMaskStyle(cutout: { dataUrls: string[]; fps: number }, elapsedSec: number): CSSProperties {
-  if (cutout.dataUrls.length === 0) return {};
-  const idx = Math.max(0, Math.min(cutout.dataUrls.length - 1, Math.floor(elapsedSec * cutout.fps)));
-  const url = `url(${cutout.dataUrls[idx]})`;
+export function cutoutMaskStyle(cutout: { frameUrls: string[]; fps: number }, elapsedSec: number): CSSProperties {
+  if (cutout.frameUrls.length === 0) return {};
+  const idx = Math.max(0, Math.min(cutout.frameUrls.length - 1, Math.floor(elapsedSec * cutout.fps)));
+  const url = `url(${cutout.frameUrls[idx]})`;
   return {
     maskImage: url,
     maskMode: "luminance",

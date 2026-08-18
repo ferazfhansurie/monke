@@ -8,6 +8,14 @@ import { DEFAULT_PIP_RECT } from "./layer-style";
 import { saveProjectToDb, loadAllProjectsFromDb, getPersistedActiveProjectId, setPersistedActiveProjectId, type PersistedProject } from "./idb";
 import { readWorkspace, writeWorkspace, type WorkspaceFile } from "./workspace";
 
+// Imported lazily: lib/segmentation.ts pulls in onnxruntime-web, and the
+// store is loaded on every page — no reason to drag the ML runtime in just
+// to free some blob URLs.
+async function releaseCutoutFrames(result: import("./segmentation").CutoutResult) {
+  const { releaseCutout } = await import("./segmentation");
+  releaseCutout(result);
+}
+
 // A Project bundles everything that should switch together — library,
 // timeline, settings, chat. Session-scoped for now (not persisted across a
 // page reload): FileSystemFileHandles are only really safe to reuse within
@@ -856,9 +864,18 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
     return id;
   },
   removePendingGeneration: (id) => set((s) => ({ pendingGenerations: s.pendingGenerations.filter((g) => g.id !== id) })),
-  setCutoutFrames: (clipId, result) => set((s) => ({ cutoutFrames: { ...s.cutoutFrames, [clipId]: result } })),
+  setCutoutFrames: (clipId, result) =>
+    set((s) => {
+      // Re-baking a clip strands the previous matte's blob URLs unless they
+      // are explicitly revoked — the browser holds those bytes until then.
+      if (s.cutoutFrames[clipId]) void releaseCutoutFrames(s.cutoutFrames[clipId]);
+      return { cutoutFrames: { ...s.cutoutFrames, [clipId]: result } };
+    }),
   clearCutoutFrames: (clipId) =>
-    set((s) => ({ cutoutFrames: Object.fromEntries(Object.entries(s.cutoutFrames).filter(([id]) => id !== clipId)) })),
+    set((s) => {
+      if (s.cutoutFrames[clipId]) void releaseCutoutFrames(s.cutoutFrames[clipId]);
+      return { cutoutFrames: Object.fromEntries(Object.entries(s.cutoutFrames).filter(([id]) => id !== clipId)) };
+    }),
   reset: () =>
     set({
       projectName: "Untitled Project",
