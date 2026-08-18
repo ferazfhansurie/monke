@@ -574,6 +574,9 @@ export function ChatPanel() {
   }, [user?.email]);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Counts the live conversation too, so the History control is reachable
+  // as soon as there's anything to look at.
+  const conversationCount = chatHistory.length + (messages.length > 0 ? 1 : 0);
   const currentModel = CHAT_MODELS.find((m) => m.id === chatModel) ?? CHAT_MODELS[0];
 
   // Queued messages sent while the agent is mid-run — held here and drained
@@ -811,23 +814,32 @@ export function ChatPanel() {
           <button
             type="button"
             onClick={() => setHistoryOpen((v) => !v)}
-            disabled={chatHistory.length === 0}
+            disabled={conversationCount === 0}
             className="flex items-center gap-1 rounded p-1 text-gray-500 hover:bg-white/10 hover:text-gray-300 disabled:opacity-30 disabled:hover:bg-transparent"
             title={
-              chatHistory.length === 0
-                ? "No past conversations in this project yet"
-                : `${chatHistory.length} past conversation${chatHistory.length === 1 ? "" : "s"} in this project`
+              conversationCount === 0
+                ? "No conversations in this project yet"
+                : `${conversationCount} conversation${conversationCount === 1 ? "" : "s"} in this project`
             }
           >
             <History className="h-3.5 w-3.5" />
-            {/* Otherwise a resumed project's past conversations are one
-                unlabeled icon away and read as "my history is gone". */}
-            {chatHistory.length > 0 && <span className="text-[9px] font-semibold text-[#f26522]">{chatHistory.length}</span>}
+            {conversationCount > 0 && <span className="text-[9px] font-semibold text-[#f26522]">{conversationCount}</span>}
           </button>
-          {historyOpen && chatHistory.length > 0 && (
+          {historyOpen && conversationCount > 0 && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setHistoryOpen(false)} />
               <div className="absolute right-0 top-full z-50 mt-1 w-64 max-h-72 overflow-y-auto rounded-lg border border-white/10 bg-[#161b22] py-1 shadow-lg">
+                {/* The conversation you're in belongs in this list too —
+                    without it the list is empty until you happen to click
+                    "New chat", which reads as having no history at all. */}
+                {messages.length > 0 && (
+                  <div className="flex w-full flex-col gap-0.5 border-b border-white/10 px-3 py-2 text-left">
+                    <span className="truncate text-[11px] text-gray-200">
+                      {sessionPreview({ messages })}
+                    </span>
+                    <span className="text-[10px] font-semibold text-[#f26522]">Current conversation</span>
+                  </div>
+                )}
                 {chatHistory.map((session) => (
                   <button
                     key={session.id}

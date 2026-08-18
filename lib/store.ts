@@ -254,9 +254,17 @@ function mergeConversations(local: ChatSession[], fromFolder: ChatSession[]): Ch
 // archived one on reopen, so everything a folder has ever held shows up in
 // one place (the History list) instead of some of it silently replacing
 // whatever chat is currently on screen.
-function archiveLiveConversation(ws: WorkspaceFile): ChatSession[] {
+//
+// `skipIfMatches` is the chat currently on screen: reopening the folder
+// you're already in reads back the sidecar you just wrote, whose live
+// conversation IS that chat — archiving it would clone the open
+// conversation into History. Keying the id off the last message (rather
+// than the save timestamp) also makes repeated merges idempotent.
+function archiveLiveConversation(ws: WorkspaceFile, skipIfMatches: ChatMessage[] = []): ChatSession[] {
   if (ws.liveConversation.length === 0) return [];
-  return [{ id: `chat_ws_${ws.updatedAt}`, messages: ws.liveConversation, endedAt: ws.updatedAt }];
+  const lastId = ws.liveConversation[ws.liveConversation.length - 1]?.id;
+  if (lastId && lastId === skipIfMatches[skipIfMatches.length - 1]?.id) return [];
+  return [{ id: `chat_ws_${lastId ?? ws.updatedAt}`, messages: ws.liveConversation, endedAt: ws.updatedAt }];
 }
 
 // Folds the live top-level fields back into `projects` for whichever project
@@ -746,7 +754,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         // worked on the same footage. The live chat stays as-is here; this
         // project's own is already the fresher one.
         if (ws) {
-          set((prev) => ({ chatHistory: mergeConversations(prev.chatHistory, [...archiveLiveConversation(ws), ...ws.conversations]) }));
+          set((prev) => ({ chatHistory: mergeConversations(prev.chatHistory, [...archiveLiveConversation(ws, prev.messages), ...ws.conversations]) }));
         }
         const resumed = get();
         return {
@@ -756,7 +764,13 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
           hasLiveConversation: resumed.messages.length > 0,
         };
       }
-      // Already the active project — treat as "refresh this folder".
+      // Already the active project — refresh its media, and still fold in
+      // any conversations the folder carries that this browser lacks (it
+      // may have been worked on elsewhere since). Reopening the folder
+      // you're already in is the most common way to ask for exactly that.
+      if (ws) {
+        set((prev) => ({ chatHistory: mergeConversations(prev.chatHistory, [...archiveLiveConversation(ws, prev.messages), ...ws.conversations]) }));
+      }
       await get().rescanFolder();
       return { action: "rescanned", projectName: get().projectName };
     }
