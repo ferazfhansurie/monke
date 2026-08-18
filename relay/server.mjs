@@ -76,6 +76,14 @@ function corsHeaders(origin) {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
+    // Chrome's Private Network Access rules block a public HTTPS page
+    // (monk-editor.vercel.app) from reaching the loopback address space
+    // unless the local server explicitly opts in — without this the
+    // browser refuses the request outright with "Permission was denied for
+    // this request to access the `loopback` address space", before any of
+    // the normal CORS checks matter. Safe here precisely because the
+    // origin allow-list above has already been checked.
+    "Access-Control-Allow-Private-Network": "true",
   };
 }
 

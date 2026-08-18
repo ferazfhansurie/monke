@@ -37,7 +37,34 @@ npm install
 npm start
 ```
 
-Leave it running in a terminal while you use MONKe. The chat panel shows a
+Then run MONKe itself locally too, and use it at **http://localhost:3000**:
+
+```
+npm run dev        # from the repo root, in a second terminal
+```
+
+### Why localhost and not the deployed site
+
+**The relay does not work from https://monk-editor.vercel.app.** Chrome
+blocks a public HTTPS page from reaching the loopback address space —
+verified, the fetch fails with:
+
+> Access to fetch at 'http://localhost:8137/health' from origin
+> 'https://monk-editor.vercel.app' has been blocked by CORS policy:
+> Permission was denied for this request to access the `loopback` address
+> space.
+
+This is Private Network Access / Local Network Access, a browser security
+rule, not a bug in the relay — a random website should not be able to probe
+services on your machine. The server does send
+`Access-Control-Allow-Private-Network: true`, which is the documented
+opt-in, but current Chrome additionally gates loopback behind a permission
+that a public origin doesn't get.
+
+Serving MONKe from localhost puts the page and the relay in the same
+address space, so the rule doesn't apply. Verified working that way.
+
+Leave both running in terminals while you use MONKe. The chat panel shows a
 small **"Personal relay"** badge when it detects the relay and is using it —
 if that badge isn't there, MONKe is using the normal hosted API, either
 because you're not signed in as the admin account or the relay isn't running.
