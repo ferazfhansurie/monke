@@ -6,6 +6,7 @@ import { DEFAULT_CHAT_MODEL } from "./models";
 import { listMediaHandles, buildMediaItem, kindForName, restoreGeneratedClip } from "./fs";
 import { DEFAULT_PIP_RECT } from "./layer-style";
 import { saveProjectToDb, loadAllProjectsFromDb, getPersistedActiveProjectId, setPersistedActiveProjectId, type PersistedProject } from "./idb";
+import { readWorkspace, writeWorkspace, conversationPreview, type WorkspaceFile } from "./workspace";
 
 // A Project bundles everything that should switch together — library,
 // timeline, settings, chat. Session-scoped for now (not persisted across a
@@ -55,6 +56,18 @@ export type OpenFolderOutcome =
   | { action: "rescanned"; projectName: string }
   | { action: "attached"; projectName: string }
   | { action: "created"; projectName: string };
+
+// One choice in the "which conversation do you want to pick up?" prompt
+// shown when an opened folder turns out to already have MONKe history in
+// it (see lib/workspace.ts).
+export interface WorkspacePick {
+  /** "live" = the conversation that was open last time; otherwise a ChatSession id. */
+  id: string;
+  label: string;
+  when: string;
+  messageCount: number;
+  isLive: boolean;
+}
 
 const defaultSettings: ProjectSettings = {
   resolutionW: 1080,
@@ -148,6 +161,10 @@ interface MonkeState {
   // to click to re-grant (browsers require a user gesture for this).
   folderNeedsReconnect: boolean;
 
+  // Set when an opened folder already contained MONKe history — drives the
+  // "pick a conversation" prompt. Cleared once the user chooses.
+  workspacePrompt: { projectName: string; picks: WorkspacePick[] } | null;
+
   // In-flight generation jobs — session-only, not persisted.
   pendingGenerations: PendingGeneration[];
 
@@ -224,12 +241,35 @@ interface MonkeState {
   switchProject: (id: string) => void;
   findProjectByFolder: (dir: FileSystemDirectoryHandle) => Promise<string | null>;
   openFolder: (dir: FileSystemDirectoryHandle) => Promise<OpenFolderOutcome>;
+  chooseWorkspaceConversation: (pickId: string | null) => void;
   setTheme: (t: "light" | "dark") => void;
   addPendingGeneration: (requestId: string, prompt: string) => string;
   removePendingGeneration: (id: string) => void;
   setCutoutFrames: (clipId: string, result: import("./segmentation").CutoutResult) => void;
   clearCutoutFrames: (clipId: string) => void;
   reset: () => void;
+}
+
+// Turns a folder's workspace file into the list of conversations to offer.
+// Returns null when there's nothing worth prompting about (no history at
+// all), so opening a fresh folder never interrupts with an empty picker.
+function buildWorkspacePrompt(projectName: string, ws: WorkspaceFile | null): { projectName: string; picks: WorkspacePick[] } | null {
+  if (!ws) return null;
+  const picks: WorkspacePick[] = [];
+  if (ws.liveConversation.length > 0) {
+    picks.push({
+      id: "live",
+      label: conversationPreview(ws.liveConversation),
+      when: ws.updatedAt,
+      messageCount: ws.liveConversation.length,
+      isLive: true,
+    });
+  }
+  for (const c of ws.conversations) {
+    if (c.messages.length === 0) continue;
+    picks.push({ id: c.id, label: conversationPreview(c.messages), when: c.endedAt, messageCount: c.messages.length, isLive: false });
+  }
+  return picks.length > 0 ? { projectName, picks } : null;
 }
 
 // Folds the live top-level fields back into `projects` for whichever project
@@ -280,6 +320,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   timelineRedoStack: [],
   hydrated: false,
   folderNeedsReconnect: false,
+  workspacePrompt: null,
   pendingGenerations: [],
   cutoutFrames: {},
   theme: "dark",
@@ -704,12 +745,32 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   // workspace instead: a known folder reopens ITS project (timeline + chat
   // history included), a new folder gets its own.
   openFolder: async (dir) => {
+    // The folder's own record first — this is what makes reopening footage
+    // anywhere (new browser, new machine, after clearing site data) still
+    // offer its conversations, instead of them existing only in this
+    // browser's IndexedDB.
+    const ws = await readWorkspace(dir);
     const existingId = await get().findProjectByFolder(dir);
 
     if (existingId) {
       if (existingId !== get().activeProjectId) {
         get().switchProject(existingId); // also triggers maybeAutoRescan
         const resumed = get();
+        // Offer this project's own conversations to pick from. Built from
+        // live state rather than the file — the in-browser project is the
+        // fresher of the two if it's been edited since the last save.
+        set({
+          workspacePrompt: buildWorkspacePrompt(resumed.projectName, {
+            version: 1,
+            updatedAt: new Date().toISOString(),
+            projectName: resumed.projectName,
+            liveConversation: resumed.messages,
+            conversations: resumed.chatHistory,
+            timeline: resumed.timeline,
+            settings: resumed.settings,
+            chatModel: resumed.chatModel,
+          }),
+        });
         return {
           action: "resumed",
           projectName: resumed.projectName,
@@ -743,7 +804,19 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
 
     set((prev) => {
       const synced = syncActiveProjectIntoList(prev);
-      const fresh: Project = { ...newProject(dir.name), folderHandle: dir };
+      // Seed the new project from the folder's own workspace file when it
+      // has one — that's the whole point of the sidecar: this browser has
+      // never seen this folder, but the folder remembers its own work.
+      const base = newProject(ws?.projectName?.trim() || dir.name);
+      const fresh: Project = {
+        ...base,
+        folderHandle: dir,
+        timeline: ws?.timeline ? { ...ws.timeline, captions: ws.timeline.captions ?? [] } : base.timeline,
+        settings: ws?.settings ?? base.settings,
+        messages: ws?.liveConversation ?? base.messages,
+        chatHistory: ws?.conversations ?? base.chatHistory,
+        chatModel: ws?.chatModel ?? base.chatModel,
+      };
       return {
         projects: [...synced, fresh],
         activeProjectId: fresh.id,
@@ -765,11 +838,45 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         timelineUndoStack: [],
         timelineRedoStack: [],
         folderNeedsReconnect: false,
+        workspacePrompt: buildWorkspacePrompt(fresh.name, ws),
       };
     });
     await get().rescanFolder();
+    if (ws) {
+      const resumed = get();
+      return {
+        action: "resumed",
+        projectName: resumed.projectName,
+        pastConversations: resumed.chatHistory.length,
+        hasLiveConversation: resumed.messages.length > 0,
+      };
+    }
     return { action: "created", projectName: dir.name };
   },
+
+  // Resolves the "pick a conversation" prompt. null = start a fresh chat
+  // (the current one is archived, never dropped). "live" = keep whatever
+  // was open last time. Any other id = pull that archived conversation
+  // back into the chat panel, archiving the live one in its place.
+  chooseWorkspaceConversation: (pickId) =>
+    set((s) => {
+      if (pickId === null) {
+        const archived: ChatSession[] =
+          s.messages.length > 0
+            ? [{ id: `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, messages: s.messages, endedAt: new Date().toISOString() }, ...s.chatHistory]
+            : s.chatHistory;
+        return { workspacePrompt: null, messages: [], chatHistory: archived.slice(0, 30) };
+      }
+      if (pickId === "live") return { workspacePrompt: null };
+      const target = s.chatHistory.find((c) => c.id === pickId);
+      if (!target) return { workspacePrompt: null };
+      const rest = s.chatHistory.filter((c) => c.id !== pickId);
+      const archivedLive: ChatSession[] =
+        s.messages.length > 0
+          ? [{ id: `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, messages: s.messages, endedAt: new Date().toISOString() }, ...rest]
+          : rest;
+      return { workspacePrompt: null, messages: target.messages, chatHistory: archivedLive.slice(0, 30) };
+    }),
 
   setTheme: (t) => set({ theme: t }),
   addPendingGeneration: (requestId, prompt) => {
@@ -844,6 +951,22 @@ async function persistNow(state: MonkeState): Promise<void> {
     }
   }
   setPersistedActiveProjectId(state.activeProjectId);
+
+  // Mirror the ACTIVE project into its own folder as .monke/workspace.json,
+  // so its conversations/timeline are recoverable from the footage itself
+  // rather than only from this browser's IndexedDB. Best-effort: a failure
+  // here (permission lapsed, read-only volume) is logged inside
+  // writeWorkspace and never interrupts the IndexedDB save above.
+  if (state.folderHandle) {
+    await writeWorkspace(state.folderHandle, {
+      projectName: state.projectName,
+      liveConversation: state.messages,
+      conversations: state.chatHistory,
+      timeline: state.timeline,
+      settings: state.settings,
+      chatModel: state.chatModel,
+    });
+  }
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
