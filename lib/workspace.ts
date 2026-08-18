@@ -86,11 +86,3 @@ export async function writeWorkspace(
     return false;
   }
 }
-
-// A short human-readable label for a conversation in the picker.
-export function conversationPreview(messages: ChatMessage[]): string {
-  const firstUser = messages.find((m) => m.role === "user");
-  const text = firstUser?.parts.find((p) => p.type === "text")?.text?.trim();
-  if (!text) return "(empty conversation)";
-  return text.length > 80 ? `${text.slice(0, 80)}…` : text;
-}

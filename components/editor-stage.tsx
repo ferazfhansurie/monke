@@ -8,7 +8,6 @@ import { PreviewPlayer } from "./preview-player";
 import { InspectorPanel } from "./inspector-panel";
 import { TimelinePanel } from "./timeline-panel";
 import { GenerationPoller } from "./generation-poller";
-import { WorkspacePrompt } from "./workspace-prompt";
 import { ResizeHandle } from "./resize-handle";
 import { useTimelinePlayer } from "@/lib/timeline-player";
 import { usePanelSize } from "@/lib/use-panel-size";
@@ -36,7 +35,6 @@ export function EditorStage() {
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#0a0c10] text-gray-100">
       <GenerationPoller />
-      <WorkspacePrompt />
       <TopBar />
       <div className="flex min-h-0 flex-1">
         <div className="flex shrink-0 flex-col overflow-hidden" style={{ width: chatWidth }}>

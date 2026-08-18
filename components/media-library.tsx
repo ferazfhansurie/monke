@@ -208,10 +208,9 @@ export function MediaLibrary() {
                 <p className="text-[10px] font-semibold text-gray-200">Resumed “{openOutcome.projectName}”</p>
                 <p className="mt-0.5 flex items-center gap-1 text-[10px] text-gray-400">
                   <History className="h-2.5 w-2.5 shrink-0" />
-                  {openOutcome.hasLiveConversation ? "Chat restored" : "No live chat"}
                   {openOutcome.pastConversations > 0
-                    ? ` · ${openOutcome.pastConversations} past conversation${openOutcome.pastConversations === 1 ? "" : "s"} in History`
-                    : ""}
+                    ? `${openOutcome.pastConversations} conversation${openOutcome.pastConversations === 1 ? "" : "s"} — open History in the chat panel`
+                    : "No saved conversations in this folder yet"}
                 </p>
               </>
             ) : openOutcome.action === "created" ? (
