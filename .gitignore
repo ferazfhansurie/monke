@@ -3,6 +3,7 @@
 # dependencies
 /node_modules
 /relay/node_modules
+/relay/.usage-log.json
 /.pnp
 .pnp.*
 .yarn/*

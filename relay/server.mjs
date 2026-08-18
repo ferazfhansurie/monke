@@ -5,6 +5,7 @@
 // Only ever run this yourself, on your own machine; never deploy it.
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { WebSocketServer } from "ws";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -14,6 +15,52 @@ import { SYSTEM_PROMPT } from "../lib/system-prompt.ts";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MONKE_RELAY_PORT) || 8137;
 const MCP_SERVER_PATH = join(__dirname, "mcp-server.mjs");
+const USAGE_LOG_PATH = join(__dirname, ".usage-log.json");
+
+// --- Usage tracking --------------------------------------------------------
+// NOT Anthropic's actual 5hr/weekly rate-limit percentage — that's computed
+// server-side against your real subscription quota and isn't derivable from
+// anything the CLI reports locally. This is a running total of the
+// `total_cost_usd` figure claude -p already returns per turn (dollar-
+// equivalent value, an approximation of usage weight), tracked against a
+// budget YOU set below, not Anthropic's own limit. Persisted to a local
+// file so it survives a relay restart, unlike everything else in this file.
+const WEEKLY_BUDGET_USD = 20;
+
+let usageLog = [];
+try {
+  if (existsSync(USAGE_LOG_PATH)) usageLog = JSON.parse(readFileSync(USAGE_LOG_PATH, "utf8"));
+} catch {
+  usageLog = [];
+}
+
+function recordUsage(costUsd) {
+  if (typeof costUsd !== "number" || !Number.isFinite(costUsd)) return;
+  usageLog.push({ ts: Date.now(), costUsd });
+  // Keep the file from growing forever — a year of even heavy personal use
+  // is nowhere near this many turns.
+  if (usageLog.length > 20000) usageLog = usageLog.slice(-20000);
+  try {
+    writeFileSync(USAGE_LOG_PATH, JSON.stringify(usageLog));
+  } catch (err) {
+    console.error("Couldn't persist usage log:", err.message);
+  }
+}
+
+function usageSummary() {
+  const now = Date.now();
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const sum = (sinceMs) => usageLog.filter((e) => e.ts >= now - sinceMs).reduce((acc, e) => acc + e.costUsd, 0);
+  const weekCostUsd = sum(7 * DAY_MS);
+  return {
+    todayCostUsd: sum(DAY_MS),
+    weekCostUsd,
+    allTimeCostUsd: usageLog.reduce((acc, e) => acc + e.costUsd, 0),
+    turnCount: usageLog.length,
+    weeklyBudgetUsd: WEEKLY_BUDGET_USD,
+    weeklyBudgetPct: Math.min(100, Math.round((weekCostUsd / WEEKLY_BUDGET_USD) * 100)),
+  };
+}
 
 // Only these origins may talk to the relay — CORS headers alone only stop
 // compliant browsers from READING the response, not from sending the
@@ -142,6 +189,12 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && req.url === "/usage") {
+    res.writeHead(200, { ...headers, "Content-Type": "application/json" });
+    res.end(JSON.stringify(usageSummary()));
+    return;
+  }
+
   if (req.method === "POST" && req.url === "/internal/dispatch-tool") {
     try {
       const { name, input } = await readJsonBody(req);
@@ -165,6 +218,7 @@ const server = createServer(async (req, res) => {
       }
       const prompt = typeof timelineContext === "string" && timelineContext.trim() ? `${timelineContext}\n\n${message}` : message;
       const result = await runClaude({ prompt, sessionId: typeof sessionId === "string" ? sessionId : undefined });
+      recordUsage(result.total_cost_usd);
       res.writeHead(200, { ...headers, "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
@@ -172,6 +226,7 @@ const server = createServer(async (req, res) => {
           sessionId: result.session_id,
           isError: !!result.is_error,
           costUsd: result.total_cost_usd,
+          usage: usageSummary(),
         })
       );
     } catch (err) {

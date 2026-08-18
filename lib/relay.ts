@@ -22,11 +22,21 @@ export async function detectRelay(): Promise<boolean> {
   }
 }
 
+export interface RelayUsage {
+  todayCostUsd: number;
+  weekCostUsd: number;
+  allTimeCostUsd: number;
+  turnCount: number;
+  weeklyBudgetUsd: number;
+  weeklyBudgetPct: number;
+}
+
 export interface RelayChatResult {
   text: string;
   sessionId?: string;
   isError?: boolean;
   error?: string;
+  usage?: RelayUsage;
 }
 
 export async function sendRelayMessage(message: string, timelineContext: string, sessionId?: string): Promise<RelayChatResult> {
@@ -37,7 +47,20 @@ export async function sendRelayMessage(message: string, timelineContext: string,
   });
   const data = await res.json();
   if (!res.ok || data.error) return { text: "", error: data.error || "Relay request failed" };
-  return { text: data.text ?? "", sessionId: data.sessionId, isError: data.isError };
+  return { text: data.text ?? "", sessionId: data.sessionId, isError: data.isError, usage: data.usage };
+}
+
+// Not Anthropic's real rate-limit percentage (see relay/server.mjs) — a
+// running total against a soft budget you set yourself. Fetched on demand
+// (e.g. on mount, or to refresh without waiting for the next chat turn).
+export async function getRelayUsage(): Promise<RelayUsage | null> {
+  try {
+    const res = await fetch(`${RELAY_HTTP_URL}/usage`, { signal: AbortSignal.timeout(1500) });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
 }
 
 export interface RelayToolResult {

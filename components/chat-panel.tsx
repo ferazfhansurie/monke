@@ -8,7 +8,7 @@ import { captureFrames, importGeneratedClip } from "@/lib/fs";
 import { transcribeAudio, subscribeAsrStatus } from "@/lib/audio";
 import { bakeCutout, subscribeCutoutStatus } from "@/lib/segmentation";
 import { startVideoGeneration } from "@/lib/generation";
-import { detectRelay, sendRelayMessage, connectRelayBridge } from "@/lib/relay";
+import { detectRelay, sendRelayMessage, connectRelayBridge, getRelayUsage, type RelayUsage } from "@/lib/relay";
 import { isAdminEmail } from "@/lib/admin";
 import { Markdown } from "./markdown";
 import type { ChatMessage, ChatMessagePart, ClipMask, ClipRect } from "@/lib/types";
@@ -545,6 +545,7 @@ export function ChatPanel() {
   // relay is a separate local process the user starts/stops independently
   // of the browser tab.
   const [relayAvailable, setRelayAvailable] = useState(false);
+  const [relayUsage, setRelayUsage] = useState<RelayUsage | null>(null);
   const relaySessionIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!user?.email || !isAdminEmail(user.email)) return;
@@ -556,9 +557,11 @@ export function ChatPanel() {
       setRelayAvailable(ok);
       if (ok && !disconnectBridge) {
         disconnectBridge = connectRelayBridge((name, input) => dispatchTool(name, input));
+        void getRelayUsage().then((u) => !cancelled && setRelayUsage(u));
       } else if (!ok && disconnectBridge) {
         disconnectBridge();
         disconnectBridge = null;
+        setRelayUsage(null);
       }
     };
     void check();
@@ -636,6 +639,7 @@ export function ChatPanel() {
         return;
       }
       relaySessionIdRef.current = result.sessionId ?? relaySessionIdRef.current;
+      if (result.usage) setRelayUsage(result.usage);
       pushMessage("assistant", [{ type: "text", text: result.text.trim() || "_(No response for that message — try rephrasing or asking again.)_" }]);
     } catch (err) {
       pushMessage("assistant", [{ type: "text", text: `Error: ${err instanceof Error ? err.message : "Relay request failed"}` }]);
@@ -775,6 +779,22 @@ export function ChatPanel() {
           </span>
         )}
         <div className="flex-1" />
+        {relayAvailable && relayUsage && (
+          <div
+            className="flex items-center gap-1"
+            title={`Running total of claude -p's own reported cost, tracked against a soft weekly budget you set (not Anthropic's actual rate-limit window) — today: $${relayUsage.todayCostUsd.toFixed(2)}, all-time: $${relayUsage.allTimeCostUsd.toFixed(2)}`}
+          >
+            <div className="h-1.5 w-16 overflow-hidden rounded-full bg-white/10">
+              <div
+                className={`h-full rounded-full ${relayUsage.weeklyBudgetPct >= 90 ? "bg-red-500" : relayUsage.weeklyBudgetPct >= 70 ? "bg-amber-500" : "bg-[#f26522]"}`}
+                style={{ width: `${relayUsage.weeklyBudgetPct}%` }}
+              />
+            </div>
+            <span className="text-[9px] text-gray-500">
+              ${relayUsage.weekCostUsd.toFixed(2)}/${relayUsage.weeklyBudgetUsd}
+            </span>
+          </div>
+        )}
         <button
           type="button"
           onClick={() => {
