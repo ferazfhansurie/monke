@@ -1,0 +1,15 @@
+{
+  "name": "monke-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Optional local relay — routes YOUR OWN MONKe chat turns through your personal Claude Code subscription (claude -p) instead of the hosted API. Personal use only, never deployed, admin-account-gated on the MONKe side. See README.md.",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ws": "^8.21.3"
+  }
+}

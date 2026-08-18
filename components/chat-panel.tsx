@@ -8,6 +8,8 @@ import { captureFrames, importGeneratedClip } from "@/lib/fs";
 import { transcribeAudio, subscribeAsrStatus } from "@/lib/audio";
 import { bakeCutout, subscribeCutoutStatus } from "@/lib/segmentation";
 import { startVideoGeneration } from "@/lib/generation";
+import { detectRelay, sendRelayMessage, connectRelayBridge } from "@/lib/relay";
+import { isAdminEmail } from "@/lib/admin";
 import { Markdown } from "./markdown";
 import type { ChatMessage, ChatMessagePart, ClipMask, ClipRect } from "@/lib/types";
 
@@ -519,6 +521,7 @@ async function dispatchTool(name: string, input: Record<string, unknown>): Promi
 }
 
 export function ChatPanel() {
+  const user = useMonkeStore((s) => s.user);
   const messages = useMonkeStore((s) => s.messages);
   const pushMessage = useMonkeStore((s) => s.pushMessage);
   const clearChat = useMonkeStore((s) => s.clearChat);
@@ -533,6 +536,39 @@ export function ChatPanel() {
   useEffect(() => subscribeAsrStatus(setAsrStatus), []);
   const [cutoutStatus, setCutoutStatus] = useState<string | null>(null);
   useEffect(() => subscribeCutoutStatus(setCutoutStatus), []);
+
+  // Optional personal relay (relay/README.md) — routes THIS account's own
+  // chat turns through its own Claude Code subscription instead of the
+  // hosted API. Admin-account-gated and entirely opt-in: everyone else, and
+  // this account whenever the relay isn't actually running, uses the normal
+  // /api/chat path unchanged. Polled rather than checked once since the
+  // relay is a separate local process the user starts/stops independently
+  // of the browser tab.
+  const [relayAvailable, setRelayAvailable] = useState(false);
+  const relaySessionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!user?.email || !isAdminEmail(user.email)) return;
+    let cancelled = false;
+    let disconnectBridge: (() => void) | null = null;
+    const check = async () => {
+      const ok = await detectRelay();
+      if (cancelled) return;
+      setRelayAvailable(ok);
+      if (ok && !disconnectBridge) {
+        disconnectBridge = connectRelayBridge((name, input) => dispatchTool(name, input));
+      } else if (!ok && disconnectBridge) {
+        disconnectBridge();
+        disconnectBridge = null;
+      }
+    };
+    void check();
+    const interval = setInterval(check, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      disconnectBridge?.();
+    };
+  }, [user?.email]);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const currentModel = CHAT_MODELS.find((m) => m.id === chatModel) ?? CHAT_MODELS[0];
@@ -586,8 +622,35 @@ export function ChatPanel() {
     void send(text);
   };
 
+  // Relay path: Claude Code's own `-p` loop calls tools autonomously via its
+  // MCP bridge (see relay/mcp-server.mjs) and only returns once it's fully
+  // done — unlike the API path, there's no tool_use/tool_result turn loop to
+  // drive here, just send the message and show the final text.
+  const sendViaRelay = async (text: string) => {
+    pushMessage("user", [{ type: "text", text }]);
+    setLoading(true);
+    try {
+      const result = await sendRelayMessage(text, buildTimelineContext(), relaySessionIdRef.current ?? undefined);
+      if (result.error) {
+        pushMessage("assistant", [{ type: "text", text: `Relay error: ${result.error}` }]);
+        return;
+      }
+      relaySessionIdRef.current = result.sessionId ?? relaySessionIdRef.current;
+      pushMessage("assistant", [{ type: "text", text: result.text.trim() || "_(No response for that message — try rephrasing or asking again.)_" }]);
+    } catch (err) {
+      pushMessage("assistant", [{ type: "text", text: `Error: ${err instanceof Error ? err.message : "Relay request failed"}` }]);
+    } finally {
+      setLoading(false);
+      dequeueAndSendNext();
+    }
+  };
+
   const send = async (text: string) => {
     if (!text.trim()) return;
+    if (relayAvailable) {
+      await sendViaRelay(text);
+      return;
+    }
     let history = [...messages, { id: "", role: "user" as const, parts: [{ type: "text" as const, text }], createdAt: "" }];
     pushMessage("user", [{ type: "text", text }]);
     setLoading(true);
@@ -706,10 +769,18 @@ export function ChatPanel() {
     <div className="flex h-full flex-col border-r border-white/10 bg-[#0d1117]">
       <div className="flex items-center gap-2 border-b border-white/10 px-2.5 py-2">
         <span className="text-[11px] font-semibold text-gray-300">{messages.length === 0 ? "New chat" : "Chat"}</span>
+        {relayAvailable && (
+          <span className="rounded bg-[#f26522]/15 px-1.5 py-0.5 text-[9px] font-semibold text-[#f26522]" title="Chat is routed through your personal Claude subscription via the local relay, not the hosted API">
+            Personal relay
+          </span>
+        )}
         <div className="flex-1" />
         <button
           type="button"
-          onClick={() => clearChat()}
+          onClick={() => {
+            relaySessionIdRef.current = null;
+            clearChat();
+          }}
           disabled={messages.length === 0 || loading}
           className="rounded p-1 text-gray-500 hover:bg-white/10 hover:text-gray-300 disabled:opacity-30 disabled:hover:bg-transparent"
           title="New chat — clears the current conversation"
@@ -735,6 +806,7 @@ export function ChatPanel() {
                     key={session.id}
                     type="button"
                     onClick={() => {
+                      relaySessionIdRef.current = null;
                       restoreChatSession(session.id);
                       setHistoryOpen(false);
                     }}
