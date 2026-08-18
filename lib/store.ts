@@ -212,6 +212,7 @@ interface MonkeState {
   renameProject: (id: string, name: string) => void;
   createProject: () => void;
   switchProject: (id: string) => void;
+  findProjectByFolder: (dir: FileSystemDirectoryHandle) => Promise<string | null>;
   setTheme: (t: "light" | "dark") => void;
   addPendingGeneration: (requestId: string, prompt: string) => string;
   removePendingGeneration: (id: string) => void;
@@ -642,6 +643,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         projectName: target.name,
         folderHandle: target.folderHandle,
         looseFileHandles: target.looseFileHandles,
+        generatedClips: target.generatedClips,
         items: target.items,
         selectedItemId: null,
         selectedClipId: null,
@@ -659,6 +661,27 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
       };
     });
     get().maybeAutoRescan();
+  },
+  // Opening a folder that's already the source of a DIFFERENT existing
+  // project should resume that project (its chat history, timeline,
+  // everything) rather than silently attaching the same folder to whatever
+  // project happens to be active right now — the VSCode/`claude --resume`
+  // behavior of "reopening a workspace picks up where you left off".
+  // isSameEntry compares actual underlying-file identity, not just a name
+  // match (two different folders can share a name; a moved/renamed folder
+  // handle can still be the same entry) — the correct comparison per spec.
+  findProjectByFolder: async (dir) => {
+    const projects = syncActiveProjectIntoList(get());
+    for (const p of projects) {
+      if (!p.folderHandle) continue;
+      try {
+        if (await p.folderHandle.isSameEntry(dir)) return p.id;
+      } catch {
+        // A handle from a since-deleted/permission-revoked folder can throw
+        // on comparison — not a match, keep looking rather than aborting.
+      }
+    }
+    return null;
   },
 
   setTheme: (t) => set({ theme: t }),

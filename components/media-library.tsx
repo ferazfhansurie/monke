@@ -21,6 +21,9 @@ export function MediaLibrary() {
   const removeItem = useMonkeStore((s) => s.removeItem);
   const addTimelineClip = useMonkeStore((s) => s.addTimelineClip);
   const setFolder = useMonkeStore((s) => s.setFolder);
+  const findProjectByFolder = useMonkeStore((s) => s.findProjectByFolder);
+  const switchProject = useMonkeStore((s) => s.switchProject);
+  const activeProjectId = useMonkeStore((s) => s.activeProjectId);
   const isLoadingFolder = useMonkeStore((s) => s.isLoadingFolder);
   const setLoadingFolder = useMonkeStore((s) => s.setLoadingFolder);
   const loadProgress = useMonkeStore((s) => s.loadProgress);
@@ -45,6 +48,16 @@ export function MediaLibrary() {
     }
     try {
       const dir = await openProjectFolder();
+
+      // This exact folder is already the source of a different project —
+      // resume that project (chat history, timeline, everything) instead
+      // of silently attaching the same footage to whatever's active now.
+      const existingProjectId = await findProjectByFolder(dir);
+      if (existingProjectId && existingProjectId !== activeProjectId) {
+        switchProject(existingProjectId);
+        return;
+      }
+
       setFolder(dir, dir.name);
       setLoadingFolder(true);
       const handles = await listMediaHandles(dir);
@@ -63,7 +76,7 @@ export function MediaLibrary() {
       setLoadingFolder(false);
       setLoadProgress(null);
     }
-  }, [setFolder, setLoadingFolder, setLoadProgress, addItem]);
+  }, [setFolder, setLoadingFolder, setLoadProgress, addItem, findProjectByFolder, switchProject, activeProjectId]);
 
   // "Import" (individual files, not a whole folder). Uses the File System
   // Access API's file picker when available — unlike a plain <input
