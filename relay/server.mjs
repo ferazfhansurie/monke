@@ -258,10 +258,37 @@ const server = createServer(async (req, res) => {
         onChild: (c) => (child = c),
       });
       if (aborted) return;
+      const text = result.result ?? "";
+      // `-p --output-format json` only ever returns final text — real tool
+      // calls happen out-of-band as tool_use blocks and never appear as
+      // literal text in a working turn. --mcp-config loading is async and
+      // non-blocking (confirmed in the CLI's own debug log), so if the MCP
+      // connection hasn't settled by the time generation starts, the model
+      // has no real tools yet — but the system prompt still tells it it's
+      // an editing agent with tools, so it free-associates a plausible
+      // tool-call transcript AND a confident fabricated success message
+      // instead of saying "no tools available". Caught this producing a
+      // fake "cutout applied" response that left the raw clip untouched
+      // while claiming success. A literal "<function_calls>"/"<invoke" in
+      // the text is an unambiguous signal the turn never touched the
+      // timeline, however convincing the prose reads.
+      if (/<function_calls>|<invoke\s+name=/i.test(text)) {
+        res.writeHead(200, { ...headers, "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            text: "That didn't actually reach the timeline — the editing tools weren't ready in time this turn, so nothing changed. Please try again.",
+            sessionId: result.session_id,
+            isError: true,
+            costUsd: result.total_cost_usd,
+            usage: await usageSummary({ force: true }),
+          })
+        );
+        return;
+      }
       res.writeHead(200, { ...headers, "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
-          text: result.result ?? "",
+          text,
           sessionId: result.session_id,
           isError: !!result.is_error,
           costUsd: result.total_cost_usd,
