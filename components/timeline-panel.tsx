@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Scissors, Trash2, Undo, Redo, ZoomIn, ZoomOut, Type, Captions, Loader2 } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { transcribeAudio } from "@/lib/audio";
+import { ClipWaveform } from "./clip-waveform";
 import type { useTimelinePlayer } from "@/lib/timeline-player";
 
 type DragKind = "start" | "end" | "reorder" | "scrub" | "move" | null;
@@ -133,6 +134,26 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
     setDragging(kind);
   };
 
+  // Master-clock positions of every OTHER clip's edges, for snapping.
+  const edgeSnapTargets = useCallback(
+    (excludeClipId: string): number[] => {
+      const targets: number[] = [];
+      let offset = 0;
+      for (const c of timeline.clips.filter((c) => (c.trackIndex ?? 0) === 0).sort((a, b) => a.order - b.order)) {
+        const dur = Math.max(0, c.trimOut - c.trimIn);
+        if (c.id !== excludeClipId) targets.push(offset, offset + dur);
+        offset += dur;
+      }
+      for (const c of timeline.clips.filter((c) => (c.trackIndex ?? 0) > 0)) {
+        if (c.id === excludeClipId) continue;
+        const start = c.timelineStart ?? 0;
+        targets.push(start, start + Math.max(0, c.trimOut - c.trimIn));
+      }
+      return targets;
+    },
+    [timeline.clips]
+  );
+
   const xToSeconds = useCallback(
     (clientX: number): number => {
       const rect = trackRef.current?.getBoundingClientRect();
@@ -201,10 +222,10 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
         const start = clip.timelineStart ?? 0;
         const item = items.find((i) => i.id === clip.mediaId);
         const sourceDur = item?.durationSec ?? clip.trimOut;
-        const snapped = snapToNearby(sec, [0, player.currentTime], pxPerSec);
+        const snapped = snapToNearby(sec, [0, player.currentTime, ...edgeSnapTargets(clip.id)], pxPerSec);
 
         if (dragging === "move") {
-          updateTimelineClip(clip.id, { timelineStart: Math.max(0, snapToNearby(sec - grabOffsetSecRef.current, [0, player.currentTime], pxPerSec)) });
+          updateTimelineClip(clip.id, { timelineStart: Math.max(0, snapToNearby(sec - grabOffsetSecRef.current, [0, player.currentTime, ...edgeSnapTargets(clip.id)], pxPerSec)) });
         } else if (dragging === "start") {
           // Trimming the head moves the in-point AND the start together, so
           // the frames already on screen stay put instead of sliding.
@@ -234,7 +255,9 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
           startOffset += Math.max(0, c.trimOut - c.trimIn);
         }
         const duration = clip.trimOut - clip.trimIn;
-        const snapTargets = [0, player.currentTime];
+        // Snapping to other clips' edges is what makes butt-joins land
+        // exactly instead of leaving a sub-frame sliver.
+        const snapTargets = [0, player.currentTime, ...edgeSnapTargets(clip.id)];
 
         if (dragging === "start") {
           const snappedTimelinePos = snapToNearby(sec, snapTargets, pxPerSec);
@@ -251,7 +274,7 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
         reorderTimelineClip(clip.id, xToOrder(e.clientX, clip.id));
       }
     },
-    [dragging, timeline, items, updateTimelineClip, reorderTimelineClip, xToOrder, pxPerSec, player, xToSeconds]
+    [dragging, timeline, items, updateTimelineClip, reorderTimelineClip, xToOrder, pxPerSec, player, xToSeconds, edgeSnapTargets]
   );
 
   const onDropMedia = useCallback(
@@ -551,6 +574,9 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
                     {item?.thumbnailUrl && (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img src={item.thumbnailUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-40" />
+                    )}
+                    {item && (item.kind === "video" || item.kind === "audio") && (
+                      <ClipWaveform item={item} trimIn={clip.trimIn} trimOut={clip.trimOut} width={width} height={22} />
                     )}
                     <div className="relative truncate px-1.5 py-1 text-[9px] text-white/90">{item?.name || "clip"}</div>
                     <div data-handle="start" onPointerDown={beginTrimDrag(clip.id, "start")} className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#f26522]/60 hover:bg-[#f26522]" />
