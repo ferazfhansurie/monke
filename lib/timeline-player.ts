@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useMonkeStore } from "./store";
 import type { ClipMask, ClipRect, Timeline } from "./types";
+import { clipDuration, sourceTimeAt, clipSpeed } from "./timeline-math";
 
 const DRIFT_CORRECTION_SEC = 0.15;
 
@@ -20,6 +21,7 @@ interface ResolvedClip {
   volume?: number;
   muted?: boolean;
   cutout?: boolean;
+  speed?: number;
 }
 
 // Only the base track (trackIndex 0, or unset for clips created before
@@ -33,7 +35,7 @@ function resolveClips(timeline: Timeline, srcForMedia: (mediaId: string) => stri
   let offset = 0;
   const out: ResolvedClip[] = [];
   for (const c of sorted) {
-    const duration = Math.max(0, c.trimOut - c.trimIn);
+    const duration = clipDuration(c);
     if (duration <= 0) continue;
     out.push({
       id: c.id,
@@ -41,6 +43,7 @@ function resolveClips(timeline: Timeline, srcForMedia: (mediaId: string) => stri
       src: srcForMedia(c.mediaId),
       trimIn: c.trimIn,
       trimOut: c.trimOut,
+      speed: c.speed,
       startOffset: offset,
       duration,
       position: c.position,
@@ -61,7 +64,7 @@ function findClipAt(clips: ResolvedClip[], t: number): { index: number; localTim
     const c = clips[i];
     const isLast = i === clips.length - 1;
     if (t < c.startOffset + c.duration || (isLast && t <= c.startOffset + c.duration)) {
-      return { index: i, localTime: c.trimIn + Math.max(0, t - c.startOffset) };
+      return { index: i, localTime: sourceTimeAt(c, t - c.startOffset) };
     }
   }
   const last = clips[clips.length - 1];
@@ -107,6 +110,9 @@ export function useTimelinePlayer(videoElA: RefObject<HTMLVideoElement | null>, 
     (el: HTMLVideoElement, clip: ResolvedClip | undefined) => {
       el.volume = clip?.volume ?? 1;
       el.muted = clip?.muted ?? false;
+      // Keep the element's own rate in step, or its audio drifts against
+      // the master clock even though we keep re-seeking the video.
+      el.playbackRate = clip ? clipSpeed(clip) : 1;
     },
     []
   );
@@ -149,7 +155,7 @@ export function useTimelinePlayer(videoElA: RefObject<HTMLVideoElement | null>, 
       if (clips.length > 1) loadIntoSlot(1, 1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clips.map((c) => `${c.id}:${c.src}:${c.trimIn}:${c.trimOut}:${c.volume}:${c.muted}`).join("|")]);
+  }, [clips.map((c) => `${c.id}:${c.src}:${c.trimIn}:${c.trimOut}:${c.volume}:${c.muted}:${c.speed}`).join("|")]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const applyGlobalTime = useCallback(

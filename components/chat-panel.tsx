@@ -12,6 +12,7 @@ import { detectRelay, sendRelayMessage, connectRelayBridge, getRelayUsage, type 
 import { isAdminEmail } from "@/lib/admin";
 import { Markdown } from "./markdown";
 import type { ChatMessage, ChatMessagePart, ClipMask, ClipRect } from "@/lib/types";
+import { clipDuration } from "@/lib/timeline-math";
 
 const STARTERS = [
   { icon: Sparkles, label: "Analyse my clips" },
@@ -182,7 +183,7 @@ function buildTimelineContext(): string {
       : items.map((i) => `- ${i.id}: "${i.name}" (${i.kind}${i.durationSec ? `, ${i.durationSec.toFixed(1)}s` : ""})`).join("\n");
 
   const baseClips = timeline.clips.filter((c) => (c.trackIndex ?? 0) === 0).sort((a, b) => a.order - b.order);
-  const totalDuration = baseClips.reduce((sum, c) => sum + Math.max(0, c.trimOut - c.trimIn), 0);
+  const totalDuration = baseClips.reduce((sum, c) => sum + clipDuration(c), 0);
   const baseLines =
     baseClips.length === 0
       ? "Empty."

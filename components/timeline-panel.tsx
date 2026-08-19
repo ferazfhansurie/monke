@@ -5,6 +5,7 @@ import { Scissors, Trash2, Undo, Redo, ZoomIn, ZoomOut, Type, Captions, Loader2 
 import { useMonkeStore } from "@/lib/store";
 import { transcribeAudio } from "@/lib/audio";
 import { ClipWaveform } from "./clip-waveform";
+import { clipDuration, clipSpeed } from "@/lib/timeline-math";
 import type { useTimelinePlayer } from "@/lib/timeline-player";
 
 type DragKind = "start" | "end" | "reorder" | "scrub" | "move" | null;
@@ -140,14 +141,14 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
       const targets: number[] = [];
       let offset = 0;
       for (const c of timeline.clips.filter((c) => (c.trackIndex ?? 0) === 0).sort((a, b) => a.order - b.order)) {
-        const dur = Math.max(0, c.trimOut - c.trimIn);
+        const dur = clipDuration(c);
         if (c.id !== excludeClipId) targets.push(offset, offset + dur);
         offset += dur;
       }
       for (const c of timeline.clips.filter((c) => (c.trackIndex ?? 0) > 0)) {
         if (c.id === excludeClipId) continue;
         const start = c.timelineStart ?? 0;
-        targets.push(start, start + Math.max(0, c.trimOut - c.trimIn));
+        targets.push(start, start + clipDuration(c));
       }
       return targets;
     },
@@ -252,9 +253,9 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
         let startOffset = 0;
         for (const c of baseSorted) {
           if (c.id === clip.id) break;
-          startOffset += Math.max(0, c.trimOut - c.trimIn);
+          startOffset += clipDuration(c);
         }
-        const duration = clip.trimOut - clip.trimIn;
+        const duration = clipDuration(clip);
         // Snapping to other clips' edges is what makes butt-joins land
         // exactly instead of leaving a sub-frame sliver.
         const snapTargets = [0, player.currentTime, ...edgeSnapTargets(clip.id)];
@@ -299,8 +300,10 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
     const clip = timeline.clips.find((c) => c.id === selectedClipId);
     if (!clip || (clip.trackIndex ?? 0) !== 0) return; // splitting overlay clips isn't supported yet — base track only
     const startOffset = player.clips.find((c) => c.id === selectedClipId)?.startOffset ?? 0;
-    const local = Math.max(0.05, player.currentTime - startOffset);
-    const dur = clip.trimOut - clip.trimIn;
+    // splitTimelineClip takes an offset into the SOURCE, so convert from
+    // timeline seconds through the clip's speed.
+    const local = Math.max(0.05, (player.currentTime - startOffset) * clipSpeed(clip));
+    const dur = Math.max(0, clip.trimOut - clip.trimIn);
     const newId = splitTimelineClip(selectedClipId, Math.min(dur - 0.05, local));
     if (newId) setSelectedClipId(newId);
   }, [selectedClipId, timeline.clips, player.clips, player.currentTime, splitTimelineClip, setSelectedClipId]);
@@ -520,7 +523,7 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
           {overlayClips.length > 0 && (
             <div className="relative h-10 border-b border-white/5 pb-1">
               {overlayClips.map((clip) => {
-                const duration = Math.max(0, clip.trimOut - clip.trimIn);
+                const duration = clipDuration(clip);
                 const left = (clip.timelineStart ?? 0) * pxPerSec;
                 const width = Math.max(20, duration * pxPerSec);
                 const item = items.find((i) => i.id === clip.mediaId);
@@ -552,7 +555,7 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
             )}
             {clips
               .reduce<{ clip: (typeof clips)[number]; duration: number; startOffset: number }[]>((acc, clip) => {
-                const duration = Math.max(0, clip.trimOut - clip.trimIn);
+                const duration = clipDuration(clip);
                 const prevEnd = acc.length > 0 ? acc[acc.length - 1].startOffset + acc[acc.length - 1].duration : 0;
                 return [...acc, { clip, duration, startOffset: prevEnd }];
               }, [])
@@ -578,7 +581,12 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
                     {item && (item.kind === "video" || item.kind === "audio") && (
                       <ClipWaveform item={item} trimIn={clip.trimIn} trimOut={clip.trimOut} width={width} height={22} />
                     )}
-                    <div className="relative truncate px-1.5 py-1 text-[9px] text-white/90">{item?.name || "clip"}</div>
+                    <div className="relative flex items-center gap-1 px-1.5 py-1 text-[9px] text-white/90">
+                      <span className="truncate">{item?.name || "clip"}</span>
+                      {clipSpeed(clip) !== 1 && (
+                        <span className="shrink-0 rounded bg-[#f26522]/20 px-1 font-mono text-[8px] text-[#f26522]">{clipSpeed(clip)}×</span>
+                      )}
+                    </div>
                     <div data-handle="start" onPointerDown={beginTrimDrag(clip.id, "start")} className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#f26522]/60 hover:bg-[#f26522]" />
                     <div data-handle="end" onPointerDown={beginTrimDrag(clip.id, "end")} className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#f26522]/60 hover:bg-[#f26522]" />
                   </div>

@@ -65,6 +65,10 @@ export interface TimelineClip {
   // cutoutFrames map (keyed by this clip's id) — this flag alone survives a
   // reload, but the baked frames don't, so cutout needs re-baking after one.
   cutout?: boolean;
+  // Playback multiplier (1 = normal). A clip at 2x occupies half as much
+  // timeline as its source range — see lib/timeline-math.ts, which owns
+  // that relationship so no caller recomputes it wrongly.
+  speed?: number;
 }
 
 // A caption is text, not media — it has no mediaId, sits on its own

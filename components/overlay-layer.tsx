@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useMonkeStore } from "@/lib/store";
 import { clipLayerStyle, cutoutMaskStyle } from "@/lib/layer-style";
 import type { TimelineClip } from "@/lib/types";
+import { clipDuration, sourceTimeAt, clipSpeed } from "@/lib/timeline-math";
 
 const DRIFT_CORRECTION_SEC = 0.15;
 
@@ -31,7 +32,7 @@ export function OverlayLayer({ masterTime, isPlaying }: OverlayLayerProps) {
       .filter((c) => (c.trackIndex ?? 0) > 0)
       .filter((c) => {
         const start = c.timelineStart ?? 0;
-        const duration = Math.max(0, c.trimOut - c.trimIn);
+        const duration = clipDuration(c);
         return masterTime >= start && masterTime < start + duration;
       })
       .sort((a, b) => (a.trackIndex ?? 0) - (b.trackIndex ?? 0));
@@ -72,7 +73,7 @@ function OverlayClipVideo({
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const elapsedInClip = Math.max(0, masterTime - (clip.timelineStart ?? 0));
-  const localTime = clip.trimIn + elapsedInClip;
+  const localTime = sourceTimeAt(clip, elapsedInClip);
 
   useEffect(() => {
     const el = ref.current;
@@ -85,7 +86,8 @@ function OverlayClipVideo({
     if (!el) return;
     el.volume = clip.volume ?? 1;
     el.muted = clip.muted ?? true;
-  }, [clip.volume, clip.muted]);
+    el.playbackRate = clipSpeed(clip);
+  }, [clip.volume, clip.muted, clip.speed]);
 
   useEffect(() => {
     const el = ref.current;

@@ -6,6 +6,7 @@ import { useMonkeStore } from "@/lib/store";
 import { FULL_FRAME, DEFAULT_PIP_RECT } from "@/lib/layer-style";
 import { GOOGLE_FONTS } from "@/lib/fonts";
 import type { ClipMask, ClipRect } from "@/lib/types";
+import { clipDuration, clipSpeed } from "@/lib/timeline-math";
 
 const ASPECT_PRESETS: Record<string, { w: number; h: number }> = {
   "9:16": { w: 1080, h: 1920 },
@@ -63,7 +64,7 @@ export function InspectorPanel() {
   const selectedCaptionId = useMonkeStore((s) => s.selectedCaptionId);
   const updateCaption = useMonkeStore((s) => s.updateCaption);
 
-  const durationSec = timeline.clips.reduce((sum, c) => sum + Math.max(0, c.trimOut - c.trimIn), 0);
+  const durationSec = timeline.clips.filter((c) => (c.trackIndex ?? 0) === 0).reduce((sum, c) => sum + clipDuration(c), 0);
   const selectedClip = timeline.clips.find((c) => c.id === selectedClipId);
   const selectedItem = selectedClip ? items.find((i) => i.id === selectedClip.mediaId) : undefined;
   const position: ClipRect = selectedClip?.position ?? FULL_FRAME;
@@ -136,6 +137,25 @@ export function InspectorPanel() {
               </label>
             ))}
           </div>
+
+          <Field label="Speed">
+            <div className="flex items-center gap-1">
+              <select
+                value={clipSpeed(selectedClip)}
+                onChange={(e) => updateTimelineClip(selectedClip.id, { speed: Number(e.target.value) })}
+                className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-gray-300 outline-none"
+              >
+                {[0.25, 0.5, 1, 1.5, 2, 3, 4].map((sp) => (
+                  <option key={sp} value={sp}>
+                    {sp}×
+                  </option>
+                ))}
+              </select>
+              <span className="w-14 text-right font-mono text-[10px] text-gray-600">
+                {clipDuration(selectedClip).toFixed(1)}s
+              </span>
+            </div>
+          </Field>
 
           <Field label="Opacity">
             <PctInput value={selectedClip.opacity ?? 1} onChange={(v) => updateTimelineClip(selectedClip.id, { opacity: v })} />

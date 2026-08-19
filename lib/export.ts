@@ -3,6 +3,7 @@
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
 import type { Caption, MediaItem, Timeline, ProjectSettings, TimelineClip } from "./types";
 import { FULL_FRAME } from "./layer-style";
+import { clipDuration, sourceSpan, sourceTimeAt, clipSpeed } from "./timeline-math";
 import type { CutoutResult } from "./segmentation";
 
 // Renders the timeline to a real MP4, entirely in the browser — no upload,
@@ -63,7 +64,7 @@ function layoutBase(timeline: Timeline, items: MediaItem[]): BaseSlot[] {
   const out: BaseSlot[] = [];
   let offset = 0;
   for (const clip of timeline.clips.filter((c) => (c.trackIndex ?? 0) === 0).sort((a, b) => a.order - b.order)) {
-    const duration = Math.max(0, clip.trimOut - clip.trimIn);
+    const duration = clipDuration(clip);
     if (duration <= 0) continue;
     const item = items.find((i) => i.id === clip.mediaId);
     if (item) out.push({ clip, item, startOffset: offset, duration });
@@ -77,7 +78,7 @@ function overlaysAt(timeline: Timeline, t: number): TimelineClip[] {
     .filter((c) => (c.trackIndex ?? 0) > 0)
     .filter((c) => {
       const start = c.timelineStart ?? 0;
-      return t >= start && t < start + Math.max(0, c.trimOut - c.trimIn);
+      return t >= start && t < start + clipDuration(c);
     })
     .sort((a, b) => (a.trackIndex ?? 0) - (b.trackIndex ?? 0));
 }
@@ -219,16 +220,16 @@ async function mixAudio(timeline: Timeline, items: MediaItem[], totalDuration: n
   if (frames <= 0) return null;
 
   const base = layoutBase(timeline, items);
-  const placements: { item: MediaItem; at: number; trimIn: number; trimOut: number; volume: number }[] = [];
+  const placements: { item: MediaItem; at: number; trimIn: number; trimOut: number; volume: number; speed: number }[] = [];
   for (const slot of base) {
     if (slot.clip.muted) continue;
-    placements.push({ item: slot.item, at: slot.startOffset, trimIn: slot.clip.trimIn, trimOut: slot.clip.trimOut, volume: slot.clip.volume ?? 1 });
+    placements.push({ item: slot.item, at: slot.startOffset, trimIn: slot.clip.trimIn, trimOut: slot.clip.trimOut, volume: slot.clip.volume ?? 1, speed: clipSpeed(slot.clip) });
   }
   for (const clip of timeline.clips.filter((c) => (c.trackIndex ?? 0) > 0)) {
     // Overlays default to muted — only include one that was explicitly unmuted.
     if (clip.muted !== false) continue;
     const item = items.find((i) => i.id === clip.mediaId);
-    if (item) placements.push({ item, at: clip.timelineStart ?? 0, trimIn: clip.trimIn, trimOut: clip.trimOut, volume: clip.volume ?? 1 });
+    if (item) placements.push({ item, at: clip.timelineStart ?? 0, trimIn: clip.trimIn, trimOut: clip.trimOut, volume: clip.volume ?? 1, speed: clipSpeed(clip) });
   }
   if (placements.length === 0) return null;
 
@@ -241,8 +242,11 @@ async function mixAudio(timeline: Timeline, items: MediaItem[], totalDuration: n
       src.buffer = buf;
       const gain = offline.createGain();
       gain.gain.value = p.volume;
+      src.playbackRate.value = p.speed;
       src.connect(gain).connect(offline.destination);
-      src.start(p.at, p.trimIn, Math.max(0, p.trimOut - p.trimIn));
+      // offset/duration are in SOURCE seconds; playbackRate is what makes
+      // that span land in the right amount of timeline.
+      src.start(p.at, p.trimIn, sourceSpan(p));
     } catch {
       // A clip with no audio track (or an undecodable one) simply
       // contributes silence rather than failing the whole export.
@@ -333,7 +337,7 @@ export async function exportTimeline(opts: ExportOptions): Promise<Blob> {
       const slot = base.find((s) => t >= s.startOffset && t < s.startOffset + s.duration) ?? base[base.length - 1];
       if (slot) {
         const video = await videoFor(slot.item, videoCache);
-        await seekTo(video, slot.clip.trimIn + Math.max(0, t - slot.startOffset));
+        await seekTo(video, sourceTimeAt(slot.clip, t - slot.startOffset));
         const frames = await loadCutoutFrames(slot.clip.id);
         const cutout = frames && cutoutFrames[slot.clip.id]
           ? frames[Math.min(frames.length - 1, Math.floor((t - slot.startOffset) * cutoutFrames[slot.clip.id].fps))] ?? null
@@ -346,7 +350,7 @@ export async function exportTimeline(opts: ExportOptions): Promise<Blob> {
         if (!item) continue;
         const elapsed = t - (clip.timelineStart ?? 0);
         const video = await videoFor(item, videoCache);
-        await seekTo(video, clip.trimIn + elapsed);
+        await seekTo(video, sourceTimeAt(clip, elapsed));
         const frames = await loadCutoutFrames(clip.id);
         const cutout = frames && cutoutFrames[clip.id]
           ? frames[Math.min(frames.length - 1, Math.floor(elapsed * cutoutFrames[clip.id].fps))] ?? null
