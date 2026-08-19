@@ -113,6 +113,19 @@ interface TimelineSnapshot {
   captions: Caption[];
 }
 
+// A copy of a clip with a fresh identity, placed so it doesn't sit exactly
+// on top of the original: base-track copies append to the end of the track,
+// overlays offset by their own length.
+function cloneClip(clip: TimelineClip, allClips: TimelineClip[], index: number): TimelineClip {
+  const id = `clip_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`;
+  if ((clip.trackIndex ?? 0) === 0) {
+    const maxOrder = allClips.filter((c) => (c.trackIndex ?? 0) === 0).reduce((m, c) => Math.max(m, c.order), -1);
+    return { ...clip, id, order: maxOrder + 1 + index };
+  }
+  const span = Math.max(0, clip.trimOut - clip.trimIn) / (clip.speed && clip.speed > 0 ? clip.speed : 1);
+  return { ...clip, id, timelineStart: (clip.timelineStart ?? 0) + span };
+}
+
 function snapshotOf(timeline: Timeline): TimelineSnapshot {
   return { clips: timeline.clips, captions: timeline.captions };
 }
@@ -137,6 +150,11 @@ interface MonkeState {
   items: MediaItem[];
   selectedItemId: string | null;
   selectedClipId: string | null;
+  // Every selected clip, for bulk actions. selectedClipId stays the primary
+  // (what the inspector edits) so single-selection behaviour is unchanged.
+  selectedClipIds: string[];
+  // Session-only clipboard — copied clips, not media.
+  clipboard: TimelineClip[];
   selectedCaptionId: string | null;
   timeline: Timeline;
   playheadSec: number;
@@ -186,6 +204,11 @@ interface MonkeState {
   removeItem: (id: string) => void;
   selectItem: (id: string | null) => void;
   selectClip: (id: string | null) => void;
+  toggleClipSelection: (id: string) => void;
+  duplicateClips: (ids: string[]) => void;
+  copyClips: (ids: string[]) => void;
+  pasteClips: (atSeconds: number) => void;
+  removeTimelineClips: (ids: string[]) => void;
   selectCaption: (id: string | null) => void;
   addTimelineClip: (
     mediaId: string,
@@ -311,6 +334,8 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
   items: [],
   selectedItemId: null,
   selectedClipId: null,
+  selectedClipIds: [],
+  clipboard: [],
   selectedCaptionId: null,
   timeline: initialProject.timeline,
   playheadSec: 0,
@@ -358,7 +383,60 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
     }));
   },
   selectItem: (id) => set({ selectedItemId: id }),
-  selectClip: (id) => set({ selectedClipId: id }),
+  selectClip: (id) => set({ selectedClipId: id, selectedClipIds: id ? [id] : [] }),
+
+  toggleClipSelection: (id) =>
+    set((s) => {
+      const has = s.selectedClipIds.includes(id);
+      const next = has ? s.selectedClipIds.filter((x) => x !== id) : [...s.selectedClipIds, id];
+      // Primary follows the newest addition; on removal it falls back to
+      // whatever is still selected so the inspector never points at nothing.
+      return { selectedClipIds: next, selectedClipId: has ? next[next.length - 1] ?? null : id };
+    }),
+
+  duplicateClips: (ids) =>
+    set((s) => {
+      const originals = s.timeline.clips.filter((c) => ids.includes(c.id));
+      if (originals.length === 0) return s;
+      const copies = originals.map((c, i) => cloneClip(c, s.timeline.clips, i));
+      return {
+        timelineUndoStack: [...s.timelineUndoStack.slice(-49), snapshotOf(s.timeline)],
+        timelineRedoStack: [],
+        timeline: { ...s.timeline, clips: [...s.timeline.clips, ...copies] },
+        selectedClipIds: copies.map((c) => c.id),
+        selectedClipId: copies[copies.length - 1]?.id ?? null,
+      };
+    }),
+
+  copyClips: (ids) => set((s) => ({ clipboard: s.timeline.clips.filter((c) => ids.includes(c.id)) })),
+
+  pasteClips: (atSeconds) =>
+    set((s) => {
+      if (s.clipboard.length === 0) return s;
+      // Base-track pastes append (the track is sequential, so "at the
+      // playhead" isn't meaningful); overlays land at the playhead.
+      const pasted = s.clipboard.map((c, i) =>
+        (c.trackIndex ?? 0) === 0
+          ? cloneClip(c, s.timeline.clips, i)
+          : { ...cloneClip(c, s.timeline.clips, i), timelineStart: Math.max(0, atSeconds) }
+      );
+      return {
+        timelineUndoStack: [...s.timelineUndoStack.slice(-49), snapshotOf(s.timeline)],
+        timelineRedoStack: [],
+        timeline: { ...s.timeline, clips: [...s.timeline.clips, ...pasted] },
+        selectedClipIds: pasted.map((c) => c.id),
+        selectedClipId: pasted[pasted.length - 1]?.id ?? null,
+      };
+    }),
+
+  removeTimelineClips: (ids) =>
+    set((s) => ({
+      timelineUndoStack: [...s.timelineUndoStack.slice(-49), snapshotOf(s.timeline)],
+      timelineRedoStack: [],
+      timeline: { ...s.timeline, clips: s.timeline.clips.filter((c) => !ids.includes(c.id)) },
+      selectedClipIds: [],
+      selectedClipId: null,
+    })),
   selectCaption: (id) => set({ selectedCaptionId: id }),
 
   addTimelineClip: (mediaId, opts) => {
@@ -671,6 +749,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         items: fresh.items,
         selectedItemId: null,
         selectedClipId: null,
+        selectedClipIds: [],
         selectedCaptionId: null,
         timeline: fresh.timeline,
         settings: fresh.settings,
@@ -702,6 +781,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         items: target.items,
         selectedItemId: null,
         selectedClipId: null,
+        selectedClipIds: [],
         selectedCaptionId: null,
         timeline: target.timeline,
         settings: target.settings,
@@ -831,6 +911,7 @@ export const useMonkeStore = create<MonkeState>((set, get) => ({
         items: fresh.items,
         selectedItemId: null,
         selectedClipId: null,
+        selectedClipIds: [],
         selectedCaptionId: null,
         timeline: fresh.timeline,
         settings: fresh.settings,

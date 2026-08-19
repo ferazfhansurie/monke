@@ -358,8 +358,12 @@ export function InspectorPanel() {
       <Section title="Keyboard Shortcuts" defaultOpen={false}>
         {[
           ["Space", "Play / pause"],
+          ["J / K / L", "Back 1s / pause / play"],
           ["S", "Split at playhead"],
-          ["Delete", "Remove selected clip/caption"],
+          ["⌘D", "Duplicate selection"],
+          ["⌘C / ⌘V", "Copy / paste clips"],
+          ["⇧ click", "Add to selection"],
+          ["Delete", "Remove selection"],
           ["← / →", "Nudge playhead 1 frame"],
         ].map(([key, desc]) => (
           <div key={key} className="flex items-center justify-between py-1">

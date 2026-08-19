@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Scissors, Trash2, Undo, Redo, ZoomIn, ZoomOut, Type, Captions, Loader2 } from "lucide-react";
+import { Scissors, Trash2, Undo, Redo, ZoomIn, ZoomOut, Type, Captions, Loader2, Copy, ClipboardPaste } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { transcribeAudio } from "@/lib/audio";
 import { ClipWaveform } from "./clip-waveform";
@@ -85,6 +85,13 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
   const undoTimeline = useMonkeStore((s) => s.undoTimeline);
   const redoTimeline = useMonkeStore((s) => s.redoTimeline);
   const selectedClipId = useMonkeStore((s) => s.selectedClipId);
+  const selectedClipIds = useMonkeStore((s) => s.selectedClipIds);
+  const toggleClipSelection = useMonkeStore((s) => s.toggleClipSelection);
+  const duplicateClips = useMonkeStore((s) => s.duplicateClips);
+  const copyClips = useMonkeStore((s) => s.copyClips);
+  const pasteClips = useMonkeStore((s) => s.pasteClips);
+  const removeTimelineClips = useMonkeStore((s) => s.removeTimelineClips);
+  const clipboardCount = useMonkeStore((s) => s.clipboard.length);
   const setSelectedClipId = useMonkeStore((s) => s.selectClip);
   const selectedCaptionId = useMonkeStore((s) => s.selectedCaptionId);
   const setSelectedCaptionId = useMonkeStore((s) => s.selectCaption);
@@ -103,6 +110,13 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
     const target = e.target as HTMLElement;
     if (target.dataset.handle) return;
     e.stopPropagation();
+    if (e.shiftKey || e.metaKey || e.ctrlKey) {
+      // Extend the selection — and don't start a reorder drag, or the
+      // gesture would fight the multi-select.
+      toggleClipSelection(clipId);
+      setSelectedCaptionId(null);
+      return;
+    }
     setSelectedClipId(clipId);
     setSelectedCaptionId(null);
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
@@ -314,10 +328,14 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
       setSelectedCaptionId(null);
       return;
     }
+    if (selectedClipIds.length > 1) {
+      removeTimelineClips(selectedClipIds);
+      return;
+    }
     if (!selectedClipId) return;
     removeTimelineClip(selectedClipId);
     setSelectedClipId(null);
-  }, [selectedClipId, selectedCaptionId, removeTimelineClip, removeCaption, setSelectedClipId, setSelectedCaptionId]);
+  }, [selectedClipId, selectedClipIds, selectedCaptionId, removeTimelineClip, removeTimelineClips, removeCaption, setSelectedClipId, setSelectedCaptionId]);
 
   const addCaptionAtPlayhead = useCallback(() => {
     const start = player.currentTime;
@@ -396,6 +414,24 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         player.seek(player.currentTime + 1 / frameRate);
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+        if (selectedClipIds.length > 0) duplicateClips(selectedClipIds);
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
+        if (selectedClipIds.length > 0) copyClips(selectedClipIds);
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") {
+        e.preventDefault();
+        pasteClips(player.currentTime);
+      } else if (e.key === "j" || e.key === "J") {
+        e.preventDefault();
+        player.seek(player.currentTime - 1);
+      } else if (e.key === "k" || e.key === "K") {
+        e.preventDefault();
+        player.pause();
+      } else if (e.key === "l" || e.key === "L") {
+        e.preventDefault();
+        if (player.isPlaying) player.seek(player.currentTime + 1);
+        else player.play();
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         if (e.shiftKey) redoTimeline();
@@ -404,7 +440,7 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [player, splitAtPlayhead, deleteSelected, frameRate, undoTimeline, redoTimeline]);
+  }, [player, splitAtPlayhead, deleteSelected, frameRate, undoTimeline, redoTimeline, selectedClipIds, duplicateClips, copyClips, pasteClips]);
 
   return (
     <div className="flex h-full flex-col bg-[#0a0c10]">
@@ -445,6 +481,24 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
           title="Delete selected clip/caption (Delete)"
         >
           <Trash2 className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => duplicateClips(selectedClipIds)}
+          disabled={selectedClipIds.length === 0}
+          className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300 disabled:opacity-30 disabled:hover:bg-transparent"
+          title="Duplicate selected (⌘D)"
+        >
+          <Copy className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => pasteClips(player.currentTime)}
+          disabled={clipboardCount === 0}
+          className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300 disabled:opacity-30 disabled:hover:bg-transparent"
+          title={clipboardCount === 0 ? "Nothing copied (⌘C to copy)" : `Paste ${clipboardCount} clip(s) (⌘V)`}
+        >
+          <ClipboardPaste className="h-3.5 w-3.5" />
         </button>
         <div className="mx-1 h-4 w-px bg-white/10" />
         <button type="button" onClick={addCaptionAtPlayhead} className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300" title="Add caption at playhead">
@@ -527,11 +581,19 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
                 const left = (clip.timelineStart ?? 0) * pxPerSec;
                 const width = Math.max(20, duration * pxPerSec);
                 const item = items.find((i) => i.id === clip.mediaId);
-                const isSelected = selectedClipId === clip.id;
+                const isSelected = selectedClipIds.includes(clip.id) || selectedClipId === clip.id;
                 return (
                   <div
                     key={clip.id}
-                    onPointerDown={beginOverlayMove(clip.id, clip.timelineStart ?? 0)}
+                    onPointerDown={(e) => {
+                      if (e.shiftKey || e.metaKey || e.ctrlKey) {
+                        e.stopPropagation();
+                        toggleClipSelection(clip.id);
+                        setSelectedCaptionId(null);
+                        return;
+                      }
+                      beginOverlayMove(clip.id, clip.timelineStart ?? 0)(e);
+                    }}
                     className={`absolute top-0 bottom-0 overflow-hidden rounded-md border-2 bg-[#2a1f14] cursor-grab active:cursor-grabbing ${
                       isSelected ? "border-[#f26522]" : "border-white/15 hover:border-white/30"
                     }`}
@@ -563,7 +625,7 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
                 const left = startOffset * pxPerSec;
                 const width = Math.max(24, duration * pxPerSec);
                 const item = items.find((i) => i.id === clip.mediaId);
-                const isSelected = selectedClipId === clip.id;
+                const isSelected = selectedClipIds.includes(clip.id) || selectedClipId === clip.id;
                 return (
                   <div
                     key={clip.id}
