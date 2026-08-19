@@ -71,54 +71,20 @@ export function InspectorPanel() {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto border-l border-white/10 bg-[#0d1117] text-gray-300">
-      <Section title="Project">
-        <Field label="Name">
-          <span className="max-w-[140px] truncate text-[11px] text-gray-300">{projectName}</span>
-        </Field>
-        <Field label="Source">
-          <span className="max-w-[140px] truncate text-[11px] text-gray-500">{folderHandle ? "Local folder" : "None"}</span>
-        </Field>
-        <Field label="Duration">
-          <span className="text-[11px] text-gray-300">{durationSec.toFixed(1)}s</span>
-        </Field>
-      </Section>
 
-      <Section title="Settings">
-        <Field label="Resolution">
-          <span className="text-[11px] text-gray-300">
-            {settings.resolutionW} × {settings.resolutionH}
-          </span>
-        </Field>
-        <Field label="Frame Rate">
-          <select
-            value={settings.frameRate}
-            onChange={(e) => setSettings({ frameRate: Number(e.target.value) })}
-            className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-gray-300 outline-none"
-          >
-            {[24, 25, 30, 60].map((fps) => (
-              <option key={fps} value={fps}>
-                {fps} fps
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Aspect Ratio">
-          <select
-            value={settings.aspectRatio}
-            onChange={(e) => {
-              const preset = ASPECT_PRESETS[e.target.value];
-              setSettings({ aspectRatio: e.target.value, ...(preset ? { resolutionW: preset.w, resolutionH: preset.h } : {}) });
-            }}
-            className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-gray-300 outline-none"
-          >
-            {Object.keys(ASPECT_PRESETS).map((ar) => (
-              <option key={ar} value={ar}>
-                {ar}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </Section>
+
+      <div className="flex items-baseline justify-between gap-2 border-b border-white/10 px-3 py-2.5">
+        <span className="truncate text-[11px] font-semibold text-gray-200">{projectName}</span>
+        <span className="shrink-0 font-mono text-[10px] text-gray-600">
+          {durationSec.toFixed(1)}s · {settings.aspectRatio}
+        </span>
+      </div>
+
+      {!selectedClip && !selectedCaption && (
+        <div className="px-3 py-6 text-[11px] leading-relaxed text-gray-600">
+          Select a clip or caption on the timeline to edit it.
+        </div>
+      )}
 
       {selectedClip && (
         <Section title="Layer & Mask">
@@ -319,6 +285,55 @@ export function InspectorPanel() {
           </div>
         </Section>
       )}
+
+      <Section title="Project" defaultOpen={false}>
+        <Field label="Name">
+          <span className="max-w-[140px] truncate text-[11px] text-gray-300">{projectName}</span>
+        </Field>
+        <Field label="Source">
+          <span className="max-w-[140px] truncate text-[11px] text-gray-500">{folderHandle ? "Local folder" : "None"}</span>
+        </Field>
+        <Field label="Duration">
+          <span className="text-[11px] text-gray-300">{durationSec.toFixed(1)}s</span>
+        </Field>
+      </Section>
+
+      <Section title="Settings" defaultOpen={false}>
+        <Field label="Resolution">
+          <span className="text-[11px] text-gray-300">
+            {settings.resolutionW} × {settings.resolutionH}
+          </span>
+        </Field>
+        <Field label="Frame Rate">
+          <select
+            value={settings.frameRate}
+            onChange={(e) => setSettings({ frameRate: Number(e.target.value) })}
+            className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-gray-300 outline-none"
+          >
+            {[24, 25, 30, 60].map((fps) => (
+              <option key={fps} value={fps}>
+                {fps} fps
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Aspect Ratio">
+          <select
+            value={settings.aspectRatio}
+            onChange={(e) => {
+              const preset = ASPECT_PRESETS[e.target.value];
+              setSettings({ aspectRatio: e.target.value, ...(preset ? { resolutionW: preset.w, resolutionH: preset.h } : {}) });
+            }}
+            className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-gray-300 outline-none"
+          >
+            {Object.keys(ASPECT_PRESETS).map((ar) => (
+              <option key={ar} value={ar}>
+                {ar}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </Section>
 
       <Section title="Keyboard Shortcuts" defaultOpen={false}>
         {[

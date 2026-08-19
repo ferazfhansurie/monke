@@ -402,17 +402,25 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
           <Redo className="h-3.5 w-3.5" />
         </button>
         <div className="mx-1 h-4 w-px bg-white/10" />
-        <button type="button" onClick={splitAtPlayhead} className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300" title="Split at playhead (S)">
+        <button
+          type="button"
+          onClick={splitAtPlayhead}
+          disabled={!selectedClipId}
+          className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300 disabled:opacity-30 disabled:hover:bg-transparent"
+          title="Split selected clip at playhead (S)"
+        >
           <Scissors className="h-3.5 w-3.5" />
         </button>
         <button
           type="button"
           onClick={deleteSelected}
-          className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300"
+          disabled={!selectedClipId && !selectedCaptionId}
+          className="rounded p-1.5 text-gray-500 hover:bg-red-500/10 hover:text-red-400 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-500"
           title="Delete selected clip/caption (Delete)"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
+        <div className="mx-1 h-4 w-px bg-white/10" />
         <button type="button" onClick={addCaptionAtPlayhead} className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300" title="Add caption at playhead">
           <Type className="h-3.5 w-3.5" />
         </button>
@@ -429,7 +437,16 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
         <button type="button" onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))} className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300">
           <ZoomOut className="h-3.5 w-3.5" />
         </button>
-        <input type="range" min={0.25} max={3} step={0.25} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-24 accent-[#f26522]" />
+        <input
+          type="range"
+          min={0.25}
+          max={3}
+          step={0.25}
+          value={zoom}
+          onChange={(e) => setZoom(Number(e.target.value))}
+          title="Zoom"
+          className="w-20 opacity-40 transition-opacity hover:opacity-100 focus:opacity-100 accent-[#f26522]"
+        />
         <button type="button" onClick={() => setZoom((z) => Math.min(3, z + 0.25))} className="rounded p-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300">
           <ZoomIn className="h-3.5 w-3.5" />
         </button>
