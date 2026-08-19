@@ -4,6 +4,7 @@ import { useEffect, useMemo } from "react";
 import { useMonkeStore } from "@/lib/store";
 import { loadGoogleFont } from "@/lib/fonts";
 import type { Caption } from "@/lib/types";
+import { captionOpacityAt } from "@/lib/captions";
 
 interface CaptionLayerProps {
   masterTime: number;
@@ -29,13 +30,13 @@ export function CaptionLayer({ masterTime }: CaptionLayerProps) {
   return (
     <>
       {active.map((c) => (
-        <CaptionBox key={c.id} caption={c} scale={scale} />
+        <CaptionBox key={c.id} caption={c} scale={scale} opacity={captionOpacityAt(c, masterTime)} />
       ))}
     </>
   );
 }
 
-function CaptionBox({ caption, scale }: { caption: Caption; scale: number }) {
+function CaptionBox({ caption, scale, opacity }: { caption: Caption; scale: number; opacity: number }) {
   const rect = caption.position;
   return (
     <div
@@ -47,6 +48,9 @@ function CaptionBox({ caption, scale }: { caption: Caption; scale: number }) {
         height: `${rect.height * 100}%`,
         zIndex: 1000,
         pointerEvents: "none",
+        opacity,
+        background: caption.background,
+        borderRadius: caption.backgroundRadius ? caption.backgroundRadius * scale : undefined,
       }}
     >
       <span

@@ -5,6 +5,7 @@ import type { Caption, MediaItem, Timeline, ProjectSettings, TimelineClip } from
 import { FULL_FRAME } from "./layer-style";
 import { clipDuration, sourceSpan, sourceTimeAt, clipSpeed, motionAt, videoFadeAt } from "./timeline-math";
 import { gradeFilterString } from "./grade";
+import { captionOpacityAt } from "./captions";
 import type { CutoutResult } from "./segmentation";
 
 // Renders the timeline to a real MP4, entirely in the browser — no upload,
@@ -183,6 +184,7 @@ function drawCaptions(ctx: CanvasRenderingContext2D, captions: Caption[], t: num
     const scale = W / 1080; // captions are authored against a 1080-wide reference
     const size = c.fontSize * scale;
     ctx.save();
+    ctx.globalAlpha = captionOpacityAt(c, t);
     ctx.font = `${c.bold ? 700 : 400} ${size}px "${c.fontFamily}", sans-serif`;
     ctx.fillStyle = c.color;
     ctx.textAlign = "center";
@@ -191,6 +193,19 @@ function drawCaptions(ctx: CanvasRenderingContext2D, captions: Caption[], t: num
     const boxY = c.position.y * H;
     const boxW = c.position.width * W;
     const boxH = c.position.height * H;
+
+    if (c.background) {
+      ctx.fillStyle = c.background;
+      const r = (c.backgroundRadius ?? 0) * scale;
+      if (r > 0 && typeof ctx.roundRect === "function") {
+        ctx.beginPath();
+        ctx.roundRect(boxX, boxY, boxW, boxH, r);
+        ctx.fill();
+      } else {
+        ctx.fillRect(boxX, boxY, boxW, boxH);
+      }
+      ctx.fillStyle = c.color; // restore for the text below
+    }
 
     // Wrap to the caption's box rather than letting long lines run off frame.
     const words = c.text.split(/\s+/);

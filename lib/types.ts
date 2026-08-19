@@ -128,6 +128,14 @@ export interface Caption {
   position: ClipRect; // fractional 0-1 frame rect the text box occupies
   bold?: boolean;
   outline?: boolean; // dark stroke/shadow for legibility over busy footage — on by default
+  // Filled behind the caption's box (not hugging the glyphs). Box-fill is
+  // identical to compute in DOM and canvas; text-hugging would depend on
+  // each engine's own text metrics agreeing, which they don't reliably.
+  background?: string;
+  /** Rounds the background box, in px against the 1080-wide reference. */
+  backgroundRadius?: number;
+  /** Fade in/out of the whole caption, in seconds. */
+  fadeSec?: number;
 }
 
 export interface Timeline {

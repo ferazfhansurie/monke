@@ -8,6 +8,7 @@ import { GOOGLE_FONTS } from "@/lib/fonts";
 import type { ClipMask, ClipRect } from "@/lib/types";
 import { clipDuration, clipSpeed, motionPreset } from "@/lib/timeline-math";
 import { hasGrade } from "@/lib/grade";
+import { captionStyle, type CaptionStyleKind } from "@/lib/captions";
 
 const ASPECT_PRESETS: Record<string, { w: number; h: number }> = {
   "9:16": { w: 1080, h: 1920 },
@@ -394,6 +395,37 @@ export function InspectorPanel() {
             rows={2}
             className="mb-2 w-full resize-none rounded bg-white/5 px-2 py-1.5 text-[12px] text-gray-200 outline-none"
           />
+          <div className="py-1 text-[10px] font-medium text-gray-600">Style</div>
+          <div className="grid grid-cols-3 gap-1 pb-1">
+            {([
+              ["subtitle", "Subtitle"],
+              ["band", "Band"],
+              ["title", "Title card"],
+            ] as [CaptionStyleKind, string][]).map(([kind, label]) => (
+              <button
+                key={kind}
+                type="button"
+                onClick={() => updateCaption(selectedCaption.id, captionStyle(kind))}
+                className="rounded bg-white/5 px-1.5 py-1 text-[10px] text-gray-400 hover:bg-white/10 hover:text-gray-200 transition-colors"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <Field label="Fade">
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                step={0.1}
+                min={0}
+                value={selectedCaption.fadeSec ?? 0}
+                onChange={(e) => updateCaption(selectedCaption.id, { fadeSec: Math.max(0, Number(e.target.value) || 0) })}
+                className="w-14 rounded bg-white/5 px-1.5 py-0.5 text-right text-[11px] text-gray-300 outline-none"
+              />
+              <span className="text-[10px] text-gray-600">s</span>
+            </div>
+          </Field>
+
           <Field label="Font">
             <select
               value={selectedCaption.fontFamily}
