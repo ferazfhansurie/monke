@@ -69,6 +69,11 @@ export interface TimelineClip {
   // timeline as its source range — see lib/timeline-math.ts, which owns
   // that relationship so no caller recomputes it wrongly.
   speed?: number;
+  // Audio ramps, in TIMELINE seconds from each end of the clip. Abrupt
+  // volume cuts at an edit point are audible as a click or a slam; these
+  // are what make a cut sound intentional.
+  fadeInSec?: number;
+  fadeOutSec?: number;
 }
 
 // A caption is text, not media — it has no mediaId, sits on its own

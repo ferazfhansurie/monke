@@ -36,3 +36,25 @@ export function clipDuration(clip: Pick<TimelineClip, "trimIn" | "trimOut" | "sp
 export function sourceTimeAt(clip: Pick<TimelineClip, "trimIn" | "trimOut" | "speed">, elapsedOnTimeline: number): number {
   return clip.trimIn + Math.max(0, elapsedOnTimeline) * clipSpeed(clip);
 }
+
+/**
+ * Volume multiplier (0-1) at a point in the clip's on-screen life, applying
+ * its fade-in and fade-out ramps. Linear, which is what an editor expects
+ * from a fade handle — equal-power curves are for crossfades between two
+ * sources, which is a Phase 3 concern.
+ */
+export function fadeGainAt(
+  clip: Pick<TimelineClip, "trimIn" | "trimOut" | "speed" | "fadeInSec" | "fadeOutSec">,
+  elapsedOnTimeline: number
+): number {
+  const dur = clipDuration(clip);
+  if (dur <= 0) return 1;
+  const t = Math.max(0, Math.min(dur, elapsedOnTimeline));
+  // Clamp so overlapping ramps on a short clip can't invert or exceed 1.
+  const fadeIn = Math.max(0, Math.min(clip.fadeInSec ?? 0, dur));
+  const fadeOut = Math.max(0, Math.min(clip.fadeOutSec ?? 0, dur));
+  let gain = 1;
+  if (fadeIn > 0 && t < fadeIn) gain = Math.min(gain, t / fadeIn);
+  if (fadeOut > 0 && t > dur - fadeOut) gain = Math.min(gain, (dur - t) / fadeOut);
+  return Math.max(0, Math.min(1, gain));
+}

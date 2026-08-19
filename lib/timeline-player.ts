@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useMonkeStore } from "./store";
 import type { ClipMask, ClipRect, Timeline } from "./types";
-import { clipDuration, sourceTimeAt, clipSpeed } from "./timeline-math";
+import { clipDuration, sourceTimeAt, clipSpeed, fadeGainAt } from "./timeline-math";
 
 const DRIFT_CORRECTION_SEC = 0.15;
 
@@ -22,6 +22,8 @@ interface ResolvedClip {
   muted?: boolean;
   cutout?: boolean;
   speed?: number;
+  fadeInSec?: number;
+  fadeOutSec?: number;
 }
 
 // Only the base track (trackIndex 0, or unset for clips created before
@@ -52,6 +54,8 @@ function resolveClips(timeline: Timeline, srcForMedia: (mediaId: string) => stri
       volume: c.volume,
       muted: c.muted,
       cutout: c.cutout,
+      fadeInSec: c.fadeInSec,
+      fadeOutSec: c.fadeOutSec,
     });
     offset += duration;
   }
@@ -155,7 +159,7 @@ export function useTimelinePlayer(videoElA: RefObject<HTMLVideoElement | null>, 
       if (clips.length > 1) loadIntoSlot(1, 1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clips.map((c) => `${c.id}:${c.src}:${c.trimIn}:${c.trimOut}:${c.volume}:${c.muted}:${c.speed}`).join("|")]);
+  }, [clips.map((c) => `${c.id}:${c.src}:${c.trimIn}:${c.trimOut}:${c.volume}:${c.muted}:${c.speed}:${c.fadeInSec}:${c.fadeOutSec}`).join("|")]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const applyGlobalTime = useCallback(
@@ -201,6 +205,14 @@ export function useTimelinePlayer(videoElA: RefObject<HTMLVideoElement | null>, 
         if (opts?.seeking || Math.abs(activeSlotEl.currentTime - localTime) > DRIFT_CORRECTION_SEC) {
           activeSlotEl.currentTime = localTime;
         }
+      }
+
+      // Fades are a function of position, so the gain has to be re-applied
+      // every tick rather than once when the clip loads.
+      const activeClip = clips[activeClipIndexRef.current];
+      const el = getVideoEl(activeSlotRef.current);
+      if (el && activeClip && ((activeClip.fadeInSec ?? 0) > 0 || (activeClip.fadeOutSec ?? 0) > 0)) {
+        el.volume = Math.max(0, Math.min(1, (activeClip.volume ?? 1) * fadeGainAt(activeClip, t - activeClip.startOffset)));
       }
 
       currentTimeRef.current = t;

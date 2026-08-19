@@ -220,16 +220,16 @@ async function mixAudio(timeline: Timeline, items: MediaItem[], totalDuration: n
   if (frames <= 0) return null;
 
   const base = layoutBase(timeline, items);
-  const placements: { item: MediaItem; at: number; trimIn: number; trimOut: number; volume: number; speed: number }[] = [];
+  const placements: { item: MediaItem; at: number; trimIn: number; trimOut: number; volume: number; speed: number; fadeIn: number; fadeOut: number; onTimeline: number }[] = [];
   for (const slot of base) {
     if (slot.clip.muted) continue;
-    placements.push({ item: slot.item, at: slot.startOffset, trimIn: slot.clip.trimIn, trimOut: slot.clip.trimOut, volume: slot.clip.volume ?? 1, speed: clipSpeed(slot.clip) });
+    placements.push({ item: slot.item, at: slot.startOffset, trimIn: slot.clip.trimIn, trimOut: slot.clip.trimOut, volume: slot.clip.volume ?? 1, speed: clipSpeed(slot.clip), fadeIn: slot.clip.fadeInSec ?? 0, fadeOut: slot.clip.fadeOutSec ?? 0, onTimeline: clipDuration(slot.clip) });
   }
   for (const clip of timeline.clips.filter((c) => (c.trackIndex ?? 0) > 0)) {
     // Overlays default to muted — only include one that was explicitly unmuted.
     if (clip.muted !== false) continue;
     const item = items.find((i) => i.id === clip.mediaId);
-    if (item) placements.push({ item, at: clip.timelineStart ?? 0, trimIn: clip.trimIn, trimOut: clip.trimOut, volume: clip.volume ?? 1, speed: clipSpeed(clip) });
+    if (item) placements.push({ item, at: clip.timelineStart ?? 0, trimIn: clip.trimIn, trimOut: clip.trimOut, volume: clip.volume ?? 1, speed: clipSpeed(clip), fadeIn: clip.fadeInSec ?? 0, fadeOut: clip.fadeOutSec ?? 0, onTimeline: clipDuration(clip) });
   }
   if (placements.length === 0) return null;
 
@@ -241,7 +241,17 @@ async function mixAudio(timeline: Timeline, items: MediaItem[], totalDuration: n
       const src = offline.createBufferSource();
       src.buffer = buf;
       const gain = offline.createGain();
-      gain.gain.value = p.volume;
+      // Scheduled on the offline timeline rather than sampled per frame:
+      // the graph resolves ramps at full audio rate, so a fade is smooth
+      // regardless of the video frame rate.
+      const fadeIn = Math.max(0, Math.min(p.fadeIn, p.onTimeline));
+      const fadeOut = Math.max(0, Math.min(p.fadeOut, p.onTimeline));
+      gain.gain.setValueAtTime(fadeIn > 0 ? 0 : p.volume, p.at);
+      if (fadeIn > 0) gain.gain.linearRampToValueAtTime(p.volume, p.at + fadeIn);
+      if (fadeOut > 0) {
+        gain.gain.setValueAtTime(p.volume, Math.max(p.at, p.at + p.onTimeline - fadeOut));
+        gain.gain.linearRampToValueAtTime(0, p.at + p.onTimeline);
+      }
       src.playbackRate.value = p.speed;
       src.connect(gain).connect(offline.destination);
       // offset/duration are in SOURCE seconds; playbackRate is what makes

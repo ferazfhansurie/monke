@@ -162,6 +162,32 @@ export function InspectorPanel() {
           </Field>
 
           <div className="py-1 text-[10px] font-medium text-gray-600">Audio</div>
+          <Field label="Fade in">
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                step={0.1}
+                min={0}
+                value={selectedClip.fadeInSec ?? 0}
+                onChange={(e) => updateTimelineClip(selectedClip.id, { fadeInSec: Math.max(0, Number(e.target.value) || 0) })}
+                className="w-14 rounded bg-white/5 px-1.5 py-0.5 text-right text-[11px] text-gray-300 outline-none"
+              />
+              <span className="text-[10px] text-gray-600">s</span>
+            </div>
+          </Field>
+          <Field label="Fade out">
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                step={0.1}
+                min={0}
+                value={selectedClip.fadeOutSec ?? 0}
+                onChange={(e) => updateTimelineClip(selectedClip.id, { fadeOutSec: Math.max(0, Number(e.target.value) || 0) })}
+                className="w-14 rounded bg-white/5 px-1.5 py-0.5 text-right text-[11px] text-gray-300 outline-none"
+              />
+              <span className="text-[10px] text-gray-600">s</span>
+            </div>
+          </Field>
           <Field label="Volume">
             <input
               type="range"

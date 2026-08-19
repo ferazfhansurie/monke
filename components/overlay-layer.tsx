@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useMonkeStore } from "@/lib/store";
 import { clipLayerStyle, cutoutMaskStyle } from "@/lib/layer-style";
 import type { TimelineClip } from "@/lib/types";
-import { clipDuration, sourceTimeAt, clipSpeed } from "@/lib/timeline-math";
+import { clipDuration, sourceTimeAt, clipSpeed, fadeGainAt } from "@/lib/timeline-math";
 
 const DRIFT_CORRECTION_SEC = 0.15;
 
@@ -84,10 +84,10 @@ function OverlayClipVideo({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.volume = clip.volume ?? 1;
+    el.volume = Math.max(0, Math.min(1, (clip.volume ?? 1) * fadeGainAt(clip, elapsedInClip)));
     el.muted = clip.muted ?? true;
     el.playbackRate = clipSpeed(clip);
-  }, [clip.volume, clip.muted, clip.speed]);
+  }, [clip, elapsedInClip]);
 
   useEffect(() => {
     const el = ref.current;
