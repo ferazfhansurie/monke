@@ -4,6 +4,7 @@ import { Muxer, ArrayBufferTarget } from "mp4-muxer";
 import type { Caption, MediaItem, Timeline, ProjectSettings, TimelineClip } from "./types";
 import { FULL_FRAME } from "./layer-style";
 import { clipDuration, sourceSpan, sourceTimeAt, clipSpeed, motionAt, videoFadeAt } from "./timeline-math";
+import { gradeFilterString } from "./grade";
 import type { CutoutResult } from "./segmentation";
 
 // Renders the timeline to a real MP4, entirely in the browser — no upload,
@@ -135,6 +136,10 @@ function drawLayer(
 
   ctx.save();
   ctx.globalAlpha = (motion.opacity ?? clip.opacity ?? 1) * videoFadeAt(clip, elapsed);
+  // The very same string CSS applies in the preview, so a graded export
+  // can't drift from what was approved on screen.
+  const filter = gradeFilterString(clip.id, clip.grade);
+  if (filter) ctx.filter = filter;
 
   if (clip.mask) {
     // clip-path inset/ellipse are fractions of the clip's OWN box.
@@ -169,6 +174,7 @@ function drawLayer(
     ctx.drawImage(source, dx, dy, dw, dh);
   }
 
+  ctx.filter = "none";
   ctx.restore();
 }
 

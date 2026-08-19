@@ -7,6 +7,7 @@ import { FULL_FRAME, DEFAULT_PIP_RECT } from "@/lib/layer-style";
 import { GOOGLE_FONTS } from "@/lib/fonts";
 import type { ClipMask, ClipRect } from "@/lib/types";
 import { clipDuration, clipSpeed, motionPreset } from "@/lib/timeline-math";
+import { hasGrade } from "@/lib/grade";
 
 const ASPECT_PRESETS: Record<string, { w: number; h: number }> = {
   "9:16": { w: 1080, h: 1920 },
@@ -20,6 +21,42 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div className="flex items-center justify-between py-1.5">
       <span className="text-[11px] text-gray-500">{label}</span>
       {children}
+    </div>
+  );
+}
+
+function GradeSlider({
+  label,
+  value,
+  onChange,
+  min = -1,
+  max = 1,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  min?: number;
+  max?: number;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2 py-1">
+      <span className="w-16 shrink-0 text-[11px] text-gray-500">{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={0.01}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        // Double-click resets to neutral — grading is iterative and getting
+        // back to zero by dragging is fiddly.
+        onDoubleClick={() => onChange(0)}
+        title="Double-click to reset"
+        className="min-w-0 flex-1 accent-[#f26522]"
+      />
+      <span className="w-9 shrink-0 text-right font-mono text-[10px] text-gray-600 tabular-nums">
+        {value === 0 ? "0" : value > 0 ? `+${value.toFixed(2)}` : value.toFixed(2)}
+      </span>
     </div>
   );
 }
@@ -160,6 +197,34 @@ export function InspectorPanel() {
           <Field label="Opacity">
             <PctInput value={selectedClip.opacity ?? 1} onChange={(v) => updateTimelineClip(selectedClip.id, { opacity: v })} />
           </Field>
+
+          <div className="flex items-center justify-between py-1">
+            <span className="text-[10px] font-medium text-gray-600">Colour</span>
+            {hasGrade(selectedClip.grade) && (
+              <button
+                type="button"
+                onClick={() => updateTimelineClip(selectedClip.id, { grade: undefined })}
+                className="rounded px-1.5 py-0.5 text-[10px] text-gray-500 hover:bg-white/10 hover:text-gray-300"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+          {([
+            ["Exposure", "exposure"],
+            ["Contrast", "contrast"],
+            ["Saturation", "saturation"],
+            ["Temp", "temperature"],
+            ["Tint", "tint"],
+            ["Lift", "lift"],
+          ] as const).map(([label, key]) => (
+            <GradeSlider
+              key={key}
+              label={label}
+              value={selectedClip.grade?.[key] ?? 0}
+              onChange={(v) => updateTimelineClip(selectedClip.id, { grade: { ...selectedClip.grade, [key]: v } })}
+            />
+          ))}
 
           <div className="py-1 text-[10px] font-medium text-gray-600">Motion</div>
           <div className="grid grid-cols-2 gap-1 pb-1">

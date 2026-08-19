@@ -49,6 +49,21 @@ export interface ClipMask {
   insetLeft: number;
 }
 
+// Primary colour correction. All values are neutral at 0 and roughly
+// -1..1, so an untouched clip is an empty/absent object rather than a set
+// of magic defaults.
+export interface ClipGrade {
+  exposure?: number;
+  contrast?: number;
+  saturation?: number;
+  /** -1 cool (blue) .. +1 warm (orange) */
+  temperature?: number;
+  /** -1 green .. +1 magenta */
+  tint?: number;
+  /** Raises or crushes the blacks. */
+  lift?: number;
+}
+
 export interface TimelineClip {
   id: string;
   mediaId: string; // references MediaItem.id — media is never duplicated
@@ -88,6 +103,7 @@ export interface TimelineClip {
   // which is why it works without changing the layout model.
   videoFadeInSec?: number;
   videoFadeOutSec?: number;
+  grade?: ClipGrade;
   // Animated position/opacity. When present these override the static
   // `position`/`opacity` above for the frames they cover — the static
   // values remain the fallback so a clip without motion is unchanged.

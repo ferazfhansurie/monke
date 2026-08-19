@@ -26,6 +26,7 @@ interface ResolvedClip {
   fadeOutSec?: number;
   videoFadeInSec?: number;
   videoFadeOutSec?: number;
+  grade?: import("./types").ClipGrade;
   keyframes?: import("./types").ClipKeyframe[];
   easing?: "linear" | "ease";
 }
@@ -62,6 +63,7 @@ function resolveClips(timeline: Timeline, srcForMedia: (mediaId: string) => stri
       fadeOutSec: c.fadeOutSec,
       videoFadeInSec: c.videoFadeInSec,
       videoFadeOutSec: c.videoFadeOutSec,
+      grade: c.grade,
       keyframes: c.keyframes,
       easing: c.easing,
     });

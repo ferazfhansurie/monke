@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import type { ClipMask, ClipRect, TimelineClip } from "./types";
+import { gradeFilterString } from "./grade";
 
 export const FULL_FRAME: ClipRect = { x: 0, y: 0, width: 1, height: 1 };
 
@@ -26,7 +27,7 @@ function maskToClipPath(mask: ClipMask): string {
 // inside a relatively-positioned stage container. Shared by the base-track
 // video slots and every overlay track's video elements, so a mask/position
 // set on ANY clip (not just overlays) renders consistently.
-export function clipLayerStyle(clip: Pick<TimelineClip, "position" | "opacity" | "mask" | "trackIndex">): CSSProperties {
+export function clipLayerStyle(clip: Pick<TimelineClip, "position" | "opacity" | "mask" | "trackIndex" | "grade" | "id">): CSSProperties {
   const rect = clip.position ?? FULL_FRAME;
   const style: CSSProperties = {
     position: "absolute",
@@ -39,6 +40,9 @@ export function clipLayerStyle(clip: Pick<TimelineClip, "position" | "opacity" |
     objectFit: "cover",
   };
   if (clip.mask) style.clipPath = maskToClipPath(clip.mask);
+  // Same filter string the exporter feeds to ctx.filter — see lib/grade.ts.
+  const filter = gradeFilterString(clip.id ?? "", clip.grade);
+  if (filter) style.filter = filter;
   return style;
 }
 
