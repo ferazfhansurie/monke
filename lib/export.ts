@@ -3,7 +3,7 @@
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
 import type { Caption, MediaItem, Timeline, ProjectSettings, TimelineClip } from "./types";
 import { FULL_FRAME } from "./layer-style";
-import { clipDuration, sourceSpan, sourceTimeAt, clipSpeed } from "./timeline-math";
+import { clipDuration, sourceSpan, sourceTimeAt, clipSpeed, motionAt } from "./timeline-math";
 import type { CutoutResult } from "./segmentation";
 
 // Renders the timeline to a real MP4, entirely in the browser — no upload,
@@ -121,16 +121,20 @@ function drawLayer(
   W: number,
   H: number,
   cutoutFrame: HTMLImageElement | null,
-  scratch: HTMLCanvasElement
+  scratch: HTMLCanvasElement,
+  elapsed = 0
 ) {
-  const rect = clip.position ?? FULL_FRAME;
+  // Same interpolation the preview uses — if these ever disagree, an export
+  // silently stops matching what was on screen.
+  const motion = motionAt(clip, elapsed);
+  const rect = motion.position ?? clip.position ?? FULL_FRAME;
   const dx = rect.x * W;
   const dy = rect.y * H;
   const dw = rect.width * W;
   const dh = rect.height * H;
 
   ctx.save();
-  ctx.globalAlpha = clip.opacity ?? 1;
+  ctx.globalAlpha = motion.opacity ?? clip.opacity ?? 1;
 
   if (clip.mask) {
     // clip-path inset/ellipse are fractions of the clip's OWN box.
@@ -352,7 +356,7 @@ export async function exportTimeline(opts: ExportOptions): Promise<Blob> {
         const cutout = frames && cutoutFrames[slot.clip.id]
           ? frames[Math.min(frames.length - 1, Math.floor((t - slot.startOffset) * cutoutFrames[slot.clip.id].fps))] ?? null
           : null;
-        drawLayer(ctx, video, slot.clip, W, H, cutout, scratch);
+        drawLayer(ctx, video, slot.clip, W, H, cutout, scratch, t - slot.startOffset);
       }
 
       for (const clip of overlaysAt(timeline, t)) {
@@ -365,7 +369,7 @@ export async function exportTimeline(opts: ExportOptions): Promise<Blob> {
         const cutout = frames && cutoutFrames[clip.id]
           ? frames[Math.min(frames.length - 1, Math.floor(elapsed * cutoutFrames[clip.id].fps))] ?? null
           : null;
-        drawLayer(ctx, video, clip, W, H, cutout, scratch);
+        drawLayer(ctx, video, clip, W, H, cutout, scratch, elapsed);
       }
 
       drawCaptions(ctx, timeline.captions, t, W, H);

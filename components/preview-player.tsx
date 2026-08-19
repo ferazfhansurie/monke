@@ -4,6 +4,7 @@ import { useRef, type CSSProperties, type RefObject } from "react";
 import { Play, Pause, SkipBack, SkipForward, StepBack, StepForward, Maximize2 } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { clipLayerStyle, cutoutMaskStyle } from "@/lib/layer-style";
+import { motionAt } from "@/lib/timeline-math";
 import { OverlayLayer } from "./overlay-layer";
 import { CaptionLayer } from "./caption-layer";
 import type { useTimelinePlayer } from "@/lib/timeline-player";
@@ -45,12 +46,22 @@ export function PreviewPlayer({ player, videoElA, videoElB }: PreviewPlayerProps
   // inline positioning/mask/opacity when the active clip actually has one
   // set, so plain single-track edits keep their original look exactly.
   const activeClip = player.clips[player.activeClipIndex];
-  const hasCustomLayer = !!activeClip && (!!activeClip.position || !!activeClip.mask || activeClip.opacity != null);
+  // Motion is a function of position within the clip, so it's recomputed on
+  // every tick — currentTime is state, so this re-renders with the clock.
+  const motion = activeClip ? motionAt(activeClip, player.currentTime - activeClip.startOffset) : {};
+  const hasMotion = !!motion.position || motion.opacity != null;
+  const hasCustomLayer = !!activeClip && (!!activeClip.position || !!activeClip.mask || activeClip.opacity != null || hasMotion);
   const activeCutout = activeClip?.cutout ? cutoutFrames[activeClip.id] : undefined;
   const activeLayerStyle: CSSProperties | undefined =
     hasCustomLayer || activeCutout
       ? {
-          ...(hasCustomLayer ? clipLayerStyle(activeClip!) : {}),
+          ...(hasCustomLayer
+            ? clipLayerStyle({
+                ...activeClip!,
+                position: motion.position ?? activeClip!.position,
+                opacity: motion.opacity ?? activeClip!.opacity,
+              })
+            : {}),
           ...(activeCutout ? cutoutMaskStyle(activeCutout, player.currentTime - activeClip!.startOffset) : {}),
         }
       : undefined;

@@ -1,4 +1,4 @@
-import type { TimelineClip } from "./types";
+import type { ClipKeyframe, ClipRect, TimelineClip } from "./types";
 
 // One home for the trim/speed/duration relationship.
 //
@@ -57,4 +57,77 @@ export function fadeGainAt(
   if (fadeIn > 0 && t < fadeIn) gain = Math.min(gain, t / fadeIn);
   if (fadeOut > 0 && t > dur - fadeOut) gain = Math.min(gain, (dur - t) / fadeOut);
   return Math.max(0, Math.min(1, gain));
+}
+
+function lerp(a: number, b: number, k: number): number {
+  return a + (b - a) * k;
+}
+
+function lerpRect(a: ClipRect, b: ClipRect, k: number): ClipRect {
+  return { x: lerp(a.x, b.x, k), y: lerp(a.y, b.y, k), width: lerp(a.width, b.width, k), height: lerp(a.height, b.height, k) };
+}
+
+// Smoothstep. A linear camera move starts and stops abruptly, which reads
+// as mechanical; easing is what makes a push look deliberate.
+function ease(k: number): number {
+  return k * k * (3 - 2 * k);
+}
+
+/**
+ * Position/opacity at a point in the clip's on-screen life, interpolating
+ * its keyframes. Returns undefined for either value when no keyframe
+ * specifies it, so callers fall back to the clip's static value.
+ */
+export function motionAt(
+  clip: Pick<TimelineClip, "trimIn" | "trimOut" | "speed" | "keyframes" | "easing">,
+  elapsedOnTimeline: number
+): { position?: ClipRect; opacity?: number } {
+  const frames = clip.keyframes;
+  if (!frames || frames.length === 0) return {};
+
+  const dur = clipDuration(clip);
+  const raw = dur > 0 ? elapsedOnTimeline / dur : 0;
+  const t = Math.max(0, Math.min(1, raw));
+
+  const sorted = [...frames].sort((a, b) => a.t - b.t);
+  if (t <= sorted[0].t) return { position: sorted[0].position, opacity: sorted[0].opacity };
+  const last = sorted[sorted.length - 1];
+  if (t >= last.t) return { position: last.position, opacity: last.opacity };
+
+  let a: ClipKeyframe = sorted[0];
+  let b: ClipKeyframe = last;
+  for (let i = 0; i < sorted.length - 1; i++) {
+    if (t >= sorted[i].t && t <= sorted[i + 1].t) {
+      a = sorted[i];
+      b = sorted[i + 1];
+      break;
+    }
+  }
+  const span = b.t - a.t;
+  const rawK = span > 0 ? (t - a.t) / span : 0;
+  const k = clip.easing === "linear" ? rawK : ease(rawK);
+
+  return {
+    position: a.position && b.position ? lerpRect(a.position, b.position, k) : (a.position ?? b.position),
+    opacity: a.opacity != null && b.opacity != null ? lerp(a.opacity, b.opacity, k) : (a.opacity ?? b.opacity),
+  };
+}
+
+/** Convenience presets — the moves people actually ask for by name. */
+export function motionPreset(kind: "push-in" | "pull-out" | "pan-left" | "pan-right", zoom = 1.25): ClipKeyframe[] {
+  // A "zoomed" rect is larger than the frame and offset so its centre stays
+  // put; the visible frame crops into it.
+  const z = Math.max(1.01, zoom);
+  const wide = { x: 0, y: 0, width: 1, height: 1 };
+  const tight = { x: (1 - z) / 2, y: (1 - z) / 2, width: z, height: z };
+  switch (kind) {
+    case "push-in":
+      return [{ t: 0, position: wide }, { t: 1, position: tight }];
+    case "pull-out":
+      return [{ t: 0, position: tight }, { t: 1, position: wide }];
+    case "pan-left":
+      return [{ t: 0, position: { ...tight, x: 0 } }, { t: 1, position: { ...tight, x: 1 - z } }];
+    case "pan-right":
+      return [{ t: 0, position: { ...tight, x: 1 - z } }, { t: 1, position: { ...tight, x: 0 } }];
+  }
 }

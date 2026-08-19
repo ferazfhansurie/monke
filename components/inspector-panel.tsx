@@ -6,7 +6,7 @@ import { useMonkeStore } from "@/lib/store";
 import { FULL_FRAME, DEFAULT_PIP_RECT } from "@/lib/layer-style";
 import { GOOGLE_FONTS } from "@/lib/fonts";
 import type { ClipMask, ClipRect } from "@/lib/types";
-import { clipDuration, clipSpeed } from "@/lib/timeline-math";
+import { clipDuration, clipSpeed, motionPreset } from "@/lib/timeline-math";
 
 const ASPECT_PRESETS: Record<string, { w: number; h: number }> = {
   "9:16": { w: 1080, h: 1920 },
@@ -160,6 +160,54 @@ export function InspectorPanel() {
           <Field label="Opacity">
             <PctInput value={selectedClip.opacity ?? 1} onChange={(v) => updateTimelineClip(selectedClip.id, { opacity: v })} />
           </Field>
+
+          <div className="py-1 text-[10px] font-medium text-gray-600">Motion</div>
+          <div className="grid grid-cols-2 gap-1 pb-1">
+            {([
+              ["push-in", "Push in"],
+              ["pull-out", "Pull out"],
+              ["pan-left", "Pan left"],
+              ["pan-right", "Pan right"],
+            ] as const).map(([kind, label]) => {
+              const active = (selectedClip.keyframes?.length ?? 0) > 0 && selectedClip.motionKind === kind;
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  onClick={() =>
+                    updateTimelineClip(selectedClip.id, { keyframes: motionPreset(kind), motionKind: kind })
+                  }
+                  className={`rounded px-1.5 py-1 text-[10px] transition-colors ${
+                    active ? "bg-[#f26522]/20 text-[#f26522]" : "bg-white/5 text-gray-400 hover:bg-white/10 hover:text-gray-200"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          {(selectedClip.keyframes?.length ?? 0) > 0 && (
+            <Field label="Easing">
+              <div className="flex items-center gap-1">
+                <select
+                  value={selectedClip.easing ?? "ease"}
+                  onChange={(e) => updateTimelineClip(selectedClip.id, { easing: e.target.value as "linear" | "ease" })}
+                  className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-gray-300 outline-none"
+                >
+                  <option value="ease">Smooth</option>
+                  <option value="linear">Linear</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => updateTimelineClip(selectedClip.id, { keyframes: undefined, motionKind: undefined })}
+                  className="rounded px-1.5 py-0.5 text-[10px] text-gray-500 hover:bg-white/10 hover:text-gray-300"
+                  title="Remove motion"
+                >
+                  Clear
+                </button>
+              </div>
+            </Field>
+          )}
 
           <div className="py-1 text-[10px] font-medium text-gray-600">Audio</div>
           <Field label="Fade in">

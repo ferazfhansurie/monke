@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useMonkeStore } from "@/lib/store";
 import { clipLayerStyle, cutoutMaskStyle } from "@/lib/layer-style";
 import type { TimelineClip } from "@/lib/types";
-import { clipDuration, sourceTimeAt, clipSpeed, fadeGainAt } from "@/lib/timeline-math";
+import { clipDuration, sourceTimeAt, clipSpeed, fadeGainAt, motionAt } from "@/lib/timeline-math";
 
 const DRIFT_CORRECTION_SEC = 0.15;
 
@@ -96,6 +96,8 @@ function OverlayClipVideo({
     return () => el.pause();
   }, [isPlaying]);
 
-  const style = cutout ? { ...clipLayerStyle(clip), ...cutoutMaskStyle(cutout, elapsedInClip) } : clipLayerStyle(clip);
+  const motion = motionAt(clip, elapsedInClip);
+  const animated = { ...clip, position: motion.position ?? clip.position, opacity: motion.opacity ?? clip.opacity };
+  const style = cutout ? { ...clipLayerStyle(animated), ...cutoutMaskStyle(cutout, elapsedInClip) } : clipLayerStyle(animated);
   return <video ref={ref} src={src} playsInline style={style} />;
 }

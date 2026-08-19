@@ -24,6 +24,8 @@ interface ResolvedClip {
   speed?: number;
   fadeInSec?: number;
   fadeOutSec?: number;
+  keyframes?: import("./types").ClipKeyframe[];
+  easing?: "linear" | "ease";
 }
 
 // Only the base track (trackIndex 0, or unset for clips created before
@@ -56,6 +58,8 @@ function resolveClips(timeline: Timeline, srcForMedia: (mediaId: string) => stri
       cutout: c.cutout,
       fadeInSec: c.fadeInSec,
       fadeOutSec: c.fadeOutSec,
+      keyframes: c.keyframes,
+      easing: c.easing,
     });
     offset += duration;
   }

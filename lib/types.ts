@@ -30,6 +30,15 @@ export interface ClipRect {
   height: number;
 }
 
+// A point in a clip's animation. `t` is normalized 0-1 through the clip's
+// ON-SCREEN life, not source seconds — so a move survives retiming and
+// re-trimming instead of drifting out of range.
+export interface ClipKeyframe {
+  t: number;
+  position?: ClipRect;
+  opacity?: number;
+}
+
 // Crops a clip's rendered box. Insets are fractions (0-1) of the clip's OWN
 // box (not the whole frame) — 0 means no crop on that edge.
 export interface ClipMask {
@@ -74,6 +83,14 @@ export interface TimelineClip {
   // are what make a cut sound intentional.
   fadeInSec?: number;
   fadeOutSec?: number;
+  // Animated position/opacity. When present these override the static
+  // `position`/`opacity` above for the frames they cover — the static
+  // values remain the fallback so a clip without motion is unchanged.
+  keyframes?: ClipKeyframe[];
+  easing?: "linear" | "ease";
+  // Which preset produced `keyframes`, so the UI can show it as selected.
+  // Purely cosmetic — the keyframes are the source of truth.
+  motionKind?: "push-in" | "pull-out" | "pan-left" | "pan-right";
 }
 
 // A caption is text, not media — it has no mediaId, sits on its own
