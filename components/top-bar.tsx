@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { Download, User, LogOut, CreditCard, Coins, Shield } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { isAdminEmail } from "@/lib/admin";
+import { exportTimeline, isExportSupported, type ExportProgress } from "@/lib/export";
 import { ProjectSwitcher } from "./project-switcher";
 
 export function TopBar() {
@@ -47,6 +48,48 @@ export function TopBar() {
     }
   };
 
+  // Export runs entirely in this tab (WebCodecs -> mp4-muxer), so it has to
+  // be cancellable and show real progress — a 30s 1080x1920 render is
+  // minutes of work, not a spinner.
+  const [exporting, setExporting] = useState<ExportProgress | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const exportAbortRef = useRef<AbortController | null>(null);
+
+  const runExport = async () => {
+    setExportError(null);
+    const support = await isExportSupported();
+    if (!support.ok) {
+      setExportError(support.reason ?? "Export isn't available in this browser.");
+      return;
+    }
+    const store = useMonkeStore.getState();
+    const controller = new AbortController();
+    exportAbortRef.current = controller;
+    setExporting({ phase: "preparing", progress: null, message: "Preparing…" });
+    try {
+      const blob = await exportTimeline({
+        timeline: store.timeline,
+        items: store.items,
+        settings: store.settings,
+        cutoutFrames: store.cutoutFrames,
+        signal: controller.signal,
+        onProgress: setExporting,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${store.projectName.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "monke"}.mp4`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Export failed";
+      if (msg !== "Export cancelled") setExportError(msg);
+    } finally {
+      exportAbortRef.current = null;
+      setExporting(null);
+    }
+  };
+
   const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
     router.replace("/login");
@@ -76,14 +119,45 @@ export function TopBar() {
             <Coins className="h-3 w-3 text-[#f26522]" /> {credits.toLocaleString()}
           </span>
         )}
-        <button
-          type="button"
-          disabled
-          title="Export isn't built yet"
-          className="flex items-center gap-1.5 rounded-md bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-gray-600 cursor-not-allowed"
-        >
-          <Download className="h-3 w-3" /> Export
-        </button>
+        {exportError && (
+          <span
+            className="max-w-[260px] truncate rounded-md bg-red-500/10 px-2 py-1 text-[10px] text-red-300"
+            title={exportError}
+            onClick={() => setExportError(null)}
+            role="alert"
+          >
+            {exportError}
+          </span>
+        )}
+        {exporting ? (
+          <div className="flex items-center gap-2 rounded-md bg-white/5 px-2.5 py-1">
+            <span className="text-[10px] text-gray-400">
+              {exporting.progress != null ? `${Math.round(exporting.progress * 100)}%` : exporting.message}
+            </span>
+            <span className="h-1 w-16 overflow-hidden rounded-full bg-white/10">
+              <span
+                className="block h-full rounded-full bg-[#f26522] transition-[width]"
+                style={{ width: `${(exporting.progress ?? 0) * 100}%` }}
+              />
+            </span>
+            <button
+              type="button"
+              onClick={() => exportAbortRef.current?.abort()}
+              className="text-[10px] font-semibold text-gray-400 hover:text-white"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={runExport}
+            title="Render the timeline to an MP4"
+            className="flex items-center gap-1.5 rounded-md bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-gray-300 hover:bg-white/10 hover:text-white transition-colors"
+          >
+            <Download className="h-3 w-3" /> Export
+          </button>
+        )}
         <div className="relative">
           <button
             type="button"
