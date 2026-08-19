@@ -39,11 +39,20 @@ export interface RelayChatResult {
   usage?: RelayUsage;
 }
 
-export async function sendRelayMessage(message: string, timelineContext: string, sessionId?: string): Promise<RelayChatResult> {
+export async function sendRelayMessage(
+  message: string,
+  timelineContext: string,
+  sessionId?: string,
+  signal?: AbortSignal
+): Promise<RelayChatResult> {
   const res = await fetch(`${RELAY_HTTP_URL}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, timelineContext, sessionId }),
+    // Aborting closes the connection, which the relay treats as a signal to
+    // kill the claude process it spawned — otherwise Stop would only hide a
+    // turn that keeps running and keeps consuming quota.
+    signal,
   });
   const data = await res.json();
   if (!res.ok || data.error) return { text: "", error: data.error || "Relay request failed" };

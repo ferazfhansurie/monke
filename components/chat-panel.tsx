@@ -49,6 +49,27 @@ function relativeTime(iso: string): string {
   return `${days}d ago`;
 }
 
+// Pasted screenshots are routinely 3000px wide — far more detail than the
+// model needs and a lot of payload. Cap the long edge; JPEG unless the
+// source has transparency worth keeping.
+const MAX_ATTACHMENT_DIM = 1280;
+
+async function fileToAttachment(file: File): Promise<string | null> {
+  if (!file.type.startsWith("image/")) return null;
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) return null;
+  const scale = Math.min(1, MAX_ATTACHMENT_DIM / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  const keepAlpha = file.type === "image/png";
+  return canvas.toDataURL(keepAlpha ? "image/png" : "image/jpeg", 0.85);
+}
+
 function sessionPreview(session: { messages: ChatMessage[] }): string {
   const firstUserText = session.messages.find((m) => m.role === "user")?.parts.find((p) => p.type === "text")?.text;
   return firstUserText?.trim() || "(empty conversation)";
@@ -152,11 +173,25 @@ function repairDanglingToolUse(msgs: AnthropicMsg[]): AnthropicMsg[] {
 function toAnthropicMessages(messages: ChatMessage[], keepImagesAfterIndex = 0): AnthropicMsg[] {
   const mapped: AnthropicMsg[] = messages.map((m, idx) => ({
     role: m.role,
-    content: m.parts.map((p) => {
-      if (p.type === "text") return { type: "text", text: p.text ?? "" };
-      if (p.type === "tool_use") return { type: "tool_use", id: p.toolUseId, name: p.name, input: p.input ?? {} };
+    content: m.parts.flatMap((p): Array<Record<string, unknown>> => {
+      if (p.type === "text") {
+        const textBlock = { type: "text", text: p.text ?? "" };
+        // Images the user attached to their own message (pasted screenshot,
+        // dropped reference). Same base64 form the probe path already uses.
+        if (p.imageDataUrls && p.imageDataUrls.length > 0 && idx >= keepImagesAfterIndex) {
+          return [
+            textBlock,
+            ...p.imageDataUrls.map((dataUrl) => {
+              const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
+              return { type: "image", source: { type: "base64", media_type: match?.[1] ?? "image/png", data: match?.[2] ?? "" } };
+            }),
+          ];
+        }
+        return [textBlock];
+      }
+      if (p.type === "tool_use") return [{ type: "tool_use", id: p.toolUseId, name: p.name, input: p.input ?? {} }];
       if (p.type === "tool_result" && idx >= keepImagesAfterIndex && p.imageDataUrls && p.imageDataUrls.length > 0) {
-        return {
+        return [{
           type: "tool_result",
           tool_use_id: p.toolUseId,
           is_error: p.isError || undefined,
@@ -167,9 +202,9 @@ function toAnthropicMessages(messages: ChatMessage[], keepImagesAfterIndex = 0):
               return { type: "image", source: { type: "base64", media_type: match?.[1] ?? "image/jpeg", data: match?.[2] ?? "" } };
             }),
           ],
-        };
+        }];
       }
-      return { type: "tool_result", tool_use_id: p.toolUseId, content: p.content ?? "", is_error: p.isError || undefined };
+      return [{ type: "tool_result", tool_use_id: p.toolUseId, content: p.content ?? "", is_error: p.isError || undefined }];
     }),
   }));
   return repairDanglingToolUse(mapped);
@@ -619,7 +654,7 @@ export function ChatPanel() {
   // is already mid-run, queue instead of blocking the user from typing the
   // next thing (or dropping it). Only the actual `send` below talks to the API.
   const submit = (text: string) => {
-    if (!text.trim()) return;
+    if (!text.trim() && attachments.length === 0) return;
     setInput("");
     if (loading) {
       queueRef.current = [...queueRef.current, text];
@@ -634,10 +669,18 @@ export function ChatPanel() {
   // done — unlike the API path, there's no tool_use/tool_result turn loop to
   // drive here, just send the message and show the final text.
   const sendViaRelay = async (text: string) => {
+    // The relay drives the claude CLI, which takes text only — attachments
+    // can't ride along on that path.
+    if (attachments.length > 0) setAttachments([]);
     pushMessage("user", [{ type: "text", text }]);
     setLoading(true);
+    stoppedByUserRef.current = false;
+    // The relay path had no AbortController at all, so Stop aborted a null
+    // ref and the turn ran on regardless.
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const result = await sendRelayMessage(text, buildTimelineContext(), relaySessionIdRef.current ?? undefined);
+      const result = await sendRelayMessage(text, buildTimelineContext(), relaySessionIdRef.current ?? undefined, controller.signal);
       if (result.error) {
         pushMessage("assistant", [{ type: "text", text: `Relay error: ${result.error}` }]);
         return;
@@ -646,8 +689,13 @@ export function ChatPanel() {
       if (result.usage) setRelayUsage(result.usage);
       pushMessage("assistant", [{ type: "text", text: result.text.trim() || "_(No response for that message — try rephrasing or asking again.)_" }]);
     } catch (err) {
-      pushMessage("assistant", [{ type: "text", text: `Error: ${err instanceof Error ? err.message : "Relay request failed"}` }]);
+      if (err instanceof DOMException && err.name === "AbortError") {
+        pushMessage("assistant", [{ type: "text", text: stoppedByUserRef.current ? "_Stopped._" : "_Cancelled._" }]);
+      } else {
+        pushMessage("assistant", [{ type: "text", text: `Error: ${err instanceof Error ? err.message : "Relay request failed"}` }]);
+      }
     } finally {
+      abortRef.current = null;
       setLoading(false);
       dequeueAndSendNext();
     }
@@ -655,12 +703,15 @@ export function ChatPanel() {
 
   const send = async (text: string) => {
     if (!text.trim()) return;
+    const staged = attachments;
+    setAttachments([]);
     if (relayAvailable) {
       await sendViaRelay(text);
       return;
     }
-    let history = [...messages, { id: "", role: "user" as const, parts: [{ type: "text" as const, text }], createdAt: "" }];
-    pushMessage("user", [{ type: "text", text }]);
+    const userParts: ChatMessagePart[] = [{ type: "text", text, imageDataUrls: staged.length > 0 ? staged : undefined }];
+    let history = [...messages, { id: "", role: "user" as const, parts: userParts, createdAt: "" }];
+    pushMessage("user", userParts);
     setLoading(true);
     stoppedByUserRef.current = false;
     timedOutRef.current = false;
@@ -779,6 +830,14 @@ export function ChatPanel() {
   // library listing in its context each turn, so a filename is enough for
   // it to resolve the right media id.
   const [dragOver, setDragOver] = useState(false);
+  // Images staged for the next message — pasted or dropped. Cleared on send.
+  const [attachments, setAttachments] = useState<string[]>([]);
+
+  const addImageFiles = async (files: File[]) => {
+    const added = (await Promise.all(files.map(fileToAttachment))).filter((x): x is string => !!x);
+    if (added.length > 0) setAttachments((prev) => [...prev, ...added]);
+    return added.length;
+  };
 
   const appendReference = (name: string) => {
     setInput((prev) => {
@@ -801,7 +860,15 @@ export function ChatPanel() {
       return;
     }
 
-    // 2. Files dragged in from the OS. Prefer getAsFileSystemHandle: it
+    // 2. Images dragged in become attachments the model can see, not
+    //    library media — a reference screenshot isn't footage to edit.
+    const imageFiles = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+    if (imageFiles.length > 0) {
+      await addImageFiles(imageFiles);
+      return;
+    }
+
+    // 3. Other files dragged in from the OS. Prefer getAsFileSystemHandle: it
     // returns a REAL handle that can be persisted and reconnected after a
     // reload, exactly like the Import button. Falling back to the plain
     // File still works for this session, it just won't survive a refresh.
@@ -957,7 +1024,7 @@ export function ChatPanel() {
         ) : (
           <div className="flex flex-col gap-3">
             {messages.map((m) => {
-              const textParts = m.parts.filter((p) => p.type === "text" && p.text);
+              const textParts = m.parts.filter((p) => p.type === "text" && (p.text || (p.imageDataUrls?.length ?? 0) > 0));
               const toolParts = m.parts.filter((p) => p.type === "tool_use" || p.type === "tool_result");
               if (textParts.length === 0 && toolParts.length === 0) return null;
               return (
@@ -970,6 +1037,14 @@ export function ChatPanel() {
                       }`}
                     >
                       {m.role === "assistant" ? <Markdown text={p.text ?? ""} /> : p.text}
+                      {p.imageDataUrls && p.imageDataUrls.length > 0 && (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {p.imageDataUrls.map((src, j) => (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img key={j} src={src} alt="Attachment" className="h-16 w-auto rounded border border-white/20 object-contain" />
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                   {toolParts.map((p, i) => (
@@ -1019,6 +1094,24 @@ export function ChatPanel() {
             ))}
           </div>
         )}
+        {attachments.length > 0 && (
+          <div className="mb-1.5 flex flex-wrap gap-1.5">
+            {attachments.map((src, i) => (
+              <div key={i} className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={src} alt="Attachment" className="h-12 w-12 rounded border border-white/10 object-cover" />
+                <button
+                  type="button"
+                  onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+                  className="absolute -right-1 -top-1 rounded-full bg-[#161b22] p-0.5 text-gray-400 hover:text-white"
+                  title="Remove"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div
           onDrop={onChatDrop}
           onDragOver={(e) => {
@@ -1033,6 +1126,12 @@ export function ChatPanel() {
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"));
+              if (files.length === 0) return; // plain text paste behaves normally
+              e.preventDefault();
+              void addImageFiles(files);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -1040,7 +1139,7 @@ export function ChatPanel() {
               }
             }}
             rows={1}
-            placeholder={loading ? "Ask a follow-up — it'll queue until this finishes" : "Ask, or drop media here to reference it"}
+            placeholder={loading ? "Ask a follow-up — it'll queue until this finishes" : "Ask, paste an image, or drop media here"}
             className="max-h-24 w-full resize-none bg-transparent text-[12px] text-gray-200 placeholder:text-gray-600 outline-none"
           />
           {loading ? (
@@ -1056,7 +1155,7 @@ export function ChatPanel() {
             <button
               type="button"
               onClick={() => submit(input)}
-              disabled={!input.trim()}
+              disabled={!input.trim() && attachments.length === 0}
               className="shrink-0 rounded-md bg-[#f26522] p-1.5 text-white disabled:opacity-30 hover:bg-[#d9541a] transition-colors"
             >
               <Send className="h-3 w-3" />

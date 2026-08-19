@@ -130,7 +130,7 @@ function dispatchToolToBrowser(name, input) {
 // --- Claude Code CLI invocation ------------------------------------------
 const ALLOWED_TOOLS = AGENT_TOOLS.map((t) => `mcp__monke__${t.name}`).join(",");
 
-function runClaude({ prompt, sessionId }) {
+function runClaude({ prompt, sessionId, onChild }) {
   return new Promise((resolve, reject) => {
     const mcpConfig = JSON.stringify({
       mcpServers: {
@@ -156,7 +156,8 @@ function runClaude({ prompt, sessionId }) {
       args.push("--append-system-prompt", SYSTEM_PROMPT);
     }
 
-    const child = spawn("claude", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("claude", args, { stdio: ["ignore", "pipe", "pipe"], detached: true });
+    onChild?.(child);
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -227,7 +228,36 @@ const server = createServer(async (req, res) => {
         return;
       }
       const prompt = typeof timelineContext === "string" && timelineContext.trim() ? `${timelineContext}\n\n${message}` : message;
-      const result = await runClaude({ prompt, sessionId: typeof sessionId === "string" ? sessionId : undefined });
+      // Stopping in the browser aborts the fetch, which closes this
+      // request. Without killing the child, `claude` would keep running to
+      // completion and keep consuming subscription quota for a turn nobody
+      // is waiting for any more.
+      let child = null;
+      let aborted = false;
+      // res, not req: req's "close" fires once the request BODY has been
+      // read, which happens immediately — it does not mean the client went
+      // away. res "close" is the one that fires on a premature disconnect.
+      res.on("close", () => {
+        if (!res.writableEnded) {
+          aborted = true;
+          if (child?.pid) {
+            // Negative pid signals the whole process group: `claude` spawns
+            // its own children, and killing only the direct child would
+            // leave those running.
+            try {
+              process.kill(-child.pid, "SIGTERM");
+            } catch {
+              child.kill("SIGTERM");
+            }
+          }
+        }
+      });
+      const result = await runClaude({
+        prompt,
+        sessionId: typeof sessionId === "string" ? sessionId : undefined,
+        onChild: (c) => (child = c),
+      });
+      if (aborted) return;
       res.writeHead(200, { ...headers, "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
