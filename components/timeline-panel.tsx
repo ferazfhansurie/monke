@@ -6,7 +6,7 @@ import { useMonkeStore } from "@/lib/store";
 import { transcribeAudio } from "@/lib/audio";
 import type { useTimelinePlayer } from "@/lib/timeline-player";
 
-type DragKind = "start" | "end" | "reorder" | "scrub" | null;
+type DragKind = "start" | "end" | "reorder" | "scrub" | "move" | null;
 
 const BASE_PX_PER_SEC = 40;
 const SNAP_THRESHOLD_PX = 8;
@@ -94,6 +94,7 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
   const [zoom, setZoom] = useState(1);
   const trackRef = useRef<HTMLDivElement>(null);
   const dragClipIdRef = useRef<string | null>(null);
+  const grabOffsetSecRef = useRef(0);
   const pxPerSec = BASE_PX_PER_SEC * zoom;
 
   const onPointerDownClip = (clipId: string) => (e: React.PointerEvent<HTMLDivElement>) => {
@@ -105,6 +106,21 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     dragClipIdRef.current = clipId;
     setDragging("reorder");
+  };
+
+  // Overlay clips float at an explicit timelineStart rather than being
+  // sequenced, so moving one is just changing that start — no reordering.
+  const beginOverlayMove = (clipId: string, timelineStart: number) => (e: React.PointerEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.dataset.handle) return; // let the trim handles win
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    setSelectedClipId(clipId);
+    setSelectedCaptionId(null);
+    const rect = trackRef.current?.getBoundingClientRect();
+    grabOffsetSecRef.current = rect ? Math.max(0, (e.clientX - rect.left) / pxPerSec) - timelineStart : 0;
+    dragClipIdRef.current = clipId;
+    setDragging("move");
   };
 
   const beginTrimDrag = (clipId: string, kind: "start" | "end") => (e: React.PointerEvent<HTMLDivElement>) => {
@@ -175,6 +191,32 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
       const sec = Math.max(0, (e.clientX - rect.left) / pxPerSec);
       const clip = timeline.clips.find((c) => c.id === dragClipIdRef.current);
       if (!clip) return;
+
+      const isOverlay = (clip.trackIndex ?? 0) > 0;
+
+      if (isOverlay) {
+        // Overlays are positioned absolutely on the master clock, so their
+        // math is simpler than the base track's: no summing of preceding
+        // clips, just this clip's own timelineStart.
+        const start = clip.timelineStart ?? 0;
+        const item = items.find((i) => i.id === clip.mediaId);
+        const sourceDur = item?.durationSec ?? clip.trimOut;
+        const snapped = snapToNearby(sec, [0, player.currentTime], pxPerSec);
+
+        if (dragging === "move") {
+          updateTimelineClip(clip.id, { timelineStart: Math.max(0, snapToNearby(sec - grabOffsetSecRef.current, [0, player.currentTime], pxPerSec)) });
+        } else if (dragging === "start") {
+          // Trimming the head moves the in-point AND the start together, so
+          // the frames already on screen stay put instead of sliding.
+          const delta = snapped - start;
+          const trimIn = Math.max(0, Math.min(clip.trimIn + delta, clip.trimOut - 0.1));
+          updateTimelineClip(clip.id, { trimIn, timelineStart: Math.max(0, start + (trimIn - clip.trimIn)) });
+        } else if (dragging === "end") {
+          const trimOut = Math.min(sourceDur, Math.max(snapped - start + clip.trimIn, clip.trimIn + 0.1));
+          updateTimelineClip(clip.id, { trimOut });
+        }
+        return;
+      }
 
       if (dragging === "start" || dragging === "end") {
         // Trim handles are dragged in TIMELINE space (screen position), but
@@ -446,18 +488,16 @@ export function TimelinePanel({ player }: TimelinePanelProps) {
                 return (
                   <div
                     key={clip.id}
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                      setSelectedClipId(clip.id);
-                      setSelectedCaptionId(null);
-                    }}
-                    className={`absolute top-0 bottom-0 overflow-hidden rounded-md border-2 bg-[#2a1f14] cursor-pointer ${
+                    onPointerDown={beginOverlayMove(clip.id, clip.timelineStart ?? 0)}
+                    className={`absolute top-0 bottom-0 overflow-hidden rounded-md border-2 bg-[#2a1f14] cursor-grab active:cursor-grabbing ${
                       isSelected ? "border-[#f26522]" : "border-white/15 hover:border-white/30"
                     }`}
                     style={{ left, width }}
-                    title={`${item?.name ?? "overlay"} — track ${clip.trackIndex}`}
+                    title={`${item?.name ?? "overlay"} — track ${clip.trackIndex} · drag to move, edges to trim`}
                   >
                     <div className="truncate px-1.5 py-1 text-[9px] text-white/90">{item?.name || "overlay"}</div>
+                    <div data-handle="start" onPointerDown={beginTrimDrag(clip.id, "start")} className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#f26522]/60 hover:bg-[#f26522]" />
+                    <div data-handle="end" onPointerDown={beginTrimDrag(clip.id, "end")} className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize bg-[#f26522]/60 hover:bg-[#f26522]" />
                   </div>
                 );
               })}

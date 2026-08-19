@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Sparkles, Film, Captions, Mic, Music, FolderTree, Send, Plus, History, Loader2, ChevronDown, Check, Square, X } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { CHAT_MODELS } from "@/lib/models";
-import { captureFrames, importGeneratedClip } from "@/lib/fs";
+import { captureFrames, importGeneratedClip, buildMediaItem, kindForName, kindForMimeType } from "@/lib/fs";
 import { transcribeAudio, subscribeAsrStatus } from "@/lib/audio";
 import { bakeCutout, subscribeCutoutStatus } from "@/lib/segmentation";
 import { startVideoGeneration } from "@/lib/generation";
@@ -772,6 +772,65 @@ export function ChatPanel() {
     }
   };
 
+  // Drag-and-drop onto the chat: library items (dragged from the media
+  // panel) and files dragged straight from the OS. Both end up as an
+  // @filename reference in the prompt — the model already receives the
+  // library listing in its context each turn, so a filename is enough for
+  // it to resolve the right media id.
+  const [dragOver, setDragOver] = useState(false);
+
+  const appendReference = (name: string) => {
+    setInput((prev) => {
+      const ref = `@${name}`;
+      if (prev.includes(ref)) return prev;
+      return prev ? `${prev.trimEnd()} ${ref} ` : `${ref} `;
+    });
+  };
+
+  const onChatDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const store = useMonkeStore.getState();
+
+    // 1. An item dragged from the media library — already imported.
+    const mediaId = e.dataTransfer.getData("application/monke-media-id");
+    if (mediaId) {
+      const item = store.items.find((i) => i.id === mediaId);
+      if (item) appendReference(item.name);
+      return;
+    }
+
+    // 2. Files dragged in from the OS. Prefer getAsFileSystemHandle: it
+    // returns a REAL handle that can be persisted and reconnected after a
+    // reload, exactly like the Import button. Falling back to the plain
+    // File still works for this session, it just won't survive a refresh.
+    const entries = Array.from(e.dataTransfer.items).filter((i) => i.kind === "file");
+    for (const entry of entries) {
+      try {
+        const withHandle = entry as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> };
+        const handle = await withHandle.getAsFileSystemHandle?.();
+        if (handle && handle.kind === "file") {
+          const fileHandle = handle as FileSystemFileHandle;
+          const kind = kindForName(fileHandle.name) ?? kindForMimeType((await fileHandle.getFile()).type);
+          if (!kind) continue;
+          store.addLooseFileHandle(fileHandle);
+          store.addItem(await buildMediaItem(fileHandle, kind));
+          appendReference(fileHandle.name);
+          continue;
+        }
+        const file = entry.getAsFile();
+        if (!file) continue;
+        const kind = kindForName(file.name) ?? kindForMimeType(file.type);
+        if (!kind) continue;
+        const pseudo = { kind: "file" as const, name: file.name, getFile: async () => file } as unknown as FileSystemFileHandle;
+        store.addItem(await buildMediaItem(pseudo, kind));
+        appendReference(file.name);
+      } catch (err) {
+        console.error("Couldn't add dropped file:", err);
+      }
+    }
+  };
+
   return (
     <div className="flex h-full flex-col border-r border-white/10 bg-[#0d1117]">
       <div className="flex items-center gap-2 border-b border-white/10 px-2.5 py-2">
@@ -959,7 +1018,17 @@ export function ChatPanel() {
             ))}
           </div>
         )}
-        <div className="flex items-end gap-1.5 rounded-lg border border-white/10 bg-white/[0.02] px-2 py-1.5 focus-within:border-[#f26522]/50">
+        <div
+          onDrop={onChatDrop}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          className={`flex items-end gap-1.5 rounded-lg border bg-white/[0.02] px-2 py-1.5 focus-within:border-[#f26522]/50 ${
+            dragOver ? "border-[#f26522] bg-[#f26522]/5" : "border-white/10"
+          }`}
+        >
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -970,7 +1039,7 @@ export function ChatPanel() {
               }
             }}
             rows={1}
-            placeholder={loading ? "Ask a follow-up — it'll queue until this finishes" : "Ask, or type @ to reference media"}
+            placeholder={loading ? "Ask a follow-up — it'll queue until this finishes" : "Ask, or drop media here to reference it"}
             className="max-h-24 w-full resize-none bg-transparent text-[12px] text-gray-200 placeholder:text-gray-600 outline-none"
           />
           {loading ? (
