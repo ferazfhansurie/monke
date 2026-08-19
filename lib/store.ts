@@ -227,7 +227,7 @@ interface MonkeState {
   ) => string;
   updateTimelineClip: (
     clipId: string,
-    patch: Partial<Pick<TimelineClip, "trimIn" | "trimOut" | "order" | "trackIndex" | "timelineStart" | "position" | "opacity" | "mask" | "volume" | "muted" | "cutout" | "speed" | "fadeInSec" | "fadeOutSec" | "keyframes" | "easing" | "motionKind">>
+    patch: Partial<Pick<TimelineClip, "trimIn" | "trimOut" | "order" | "trackIndex" | "timelineStart" | "position" | "opacity" | "mask" | "volume" | "muted" | "cutout" | "speed" | "fadeInSec" | "fadeOutSec" | "videoFadeInSec" | "videoFadeOutSec" | "keyframes" | "easing" | "motionKind">>
   ) => void;
   removeTimelineClip: (clipId: string) => void;
   reorderTimelineClip: (clipId: string, order: number) => void;

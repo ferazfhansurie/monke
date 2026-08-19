@@ -209,6 +209,33 @@ export function InspectorPanel() {
             </Field>
           )}
 
+          <Field label="Fade from black">
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                step={0.1}
+                min={0}
+                value={selectedClip.videoFadeInSec ?? 0}
+                onChange={(e) => updateTimelineClip(selectedClip.id, { videoFadeInSec: Math.max(0, Number(e.target.value) || 0) })}
+                className="w-14 rounded bg-white/5 px-1.5 py-0.5 text-right text-[11px] text-gray-300 outline-none"
+              />
+              <span className="text-[10px] text-gray-600">s</span>
+            </div>
+          </Field>
+          <Field label="Fade to black">
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                step={0.1}
+                min={0}
+                value={selectedClip.videoFadeOutSec ?? 0}
+                onChange={(e) => updateTimelineClip(selectedClip.id, { videoFadeOutSec: Math.max(0, Number(e.target.value) || 0) })}
+                className="w-14 rounded bg-white/5 px-1.5 py-0.5 text-right text-[11px] text-gray-300 outline-none"
+              />
+              <span className="text-[10px] text-gray-600">s</span>
+            </div>
+          </Field>
+
           <div className="py-1 text-[10px] font-medium text-gray-600">Audio</div>
           <Field label="Fade in">
             <div className="flex items-center gap-1">

@@ -47,12 +47,33 @@ export function fadeGainAt(
   clip: Pick<TimelineClip, "trimIn" | "trimOut" | "speed" | "fadeInSec" | "fadeOutSec">,
   elapsedOnTimeline: number
 ): number {
+  return rampAt(clip, elapsedOnTimeline, clip.fadeInSec ?? 0, clip.fadeOutSec ?? 0);
+}
+
+/**
+ * Fade to/from black, in TIMELINE seconds — the "dip to black" transition.
+ * Shares the ramp shape with audio fades so a clip fading out visually and
+ * audibly stays in step.
+ */
+export function videoFadeAt(
+  clip: Pick<TimelineClip, "trimIn" | "trimOut" | "speed" | "videoFadeInSec" | "videoFadeOutSec">,
+  elapsedOnTimeline: number
+): number {
+  return rampAt(clip, elapsedOnTimeline, clip.videoFadeInSec ?? 0, clip.videoFadeOutSec ?? 0);
+}
+
+function rampAt(
+  clip: Pick<TimelineClip, "trimIn" | "trimOut" | "speed">,
+  elapsedOnTimeline: number,
+  inSec: number,
+  outSec: number
+): number {
   const dur = clipDuration(clip);
   if (dur <= 0) return 1;
   const t = Math.max(0, Math.min(dur, elapsedOnTimeline));
   // Clamp so overlapping ramps on a short clip can't invert or exceed 1.
-  const fadeIn = Math.max(0, Math.min(clip.fadeInSec ?? 0, dur));
-  const fadeOut = Math.max(0, Math.min(clip.fadeOutSec ?? 0, dur));
+  const fadeIn = Math.max(0, Math.min(inSec, dur));
+  const fadeOut = Math.max(0, Math.min(outSec, dur));
   let gain = 1;
   if (fadeIn > 0 && t < fadeIn) gain = Math.min(gain, t / fadeIn);
   if (fadeOut > 0 && t > dur - fadeOut) gain = Math.min(gain, (dur - t) / fadeOut);

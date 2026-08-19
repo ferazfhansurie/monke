@@ -3,7 +3,7 @@
 import { Muxer, ArrayBufferTarget } from "mp4-muxer";
 import type { Caption, MediaItem, Timeline, ProjectSettings, TimelineClip } from "./types";
 import { FULL_FRAME } from "./layer-style";
-import { clipDuration, sourceSpan, sourceTimeAt, clipSpeed, motionAt } from "./timeline-math";
+import { clipDuration, sourceSpan, sourceTimeAt, clipSpeed, motionAt, videoFadeAt } from "./timeline-math";
 import type { CutoutResult } from "./segmentation";
 
 // Renders the timeline to a real MP4, entirely in the browser — no upload,
@@ -134,7 +134,7 @@ function drawLayer(
   const dh = rect.height * H;
 
   ctx.save();
-  ctx.globalAlpha = motion.opacity ?? clip.opacity ?? 1;
+  ctx.globalAlpha = (motion.opacity ?? clip.opacity ?? 1) * videoFadeAt(clip, elapsed);
 
   if (clip.mask) {
     // clip-path inset/ellipse are fractions of the clip's OWN box.

@@ -24,6 +24,8 @@ interface ResolvedClip {
   speed?: number;
   fadeInSec?: number;
   fadeOutSec?: number;
+  videoFadeInSec?: number;
+  videoFadeOutSec?: number;
   keyframes?: import("./types").ClipKeyframe[];
   easing?: "linear" | "ease";
 }
@@ -58,6 +60,8 @@ function resolveClips(timeline: Timeline, srcForMedia: (mediaId: string) => stri
       cutout: c.cutout,
       fadeInSec: c.fadeInSec,
       fadeOutSec: c.fadeOutSec,
+      videoFadeInSec: c.videoFadeInSec,
+      videoFadeOutSec: c.videoFadeOutSec,
       keyframes: c.keyframes,
       easing: c.easing,
     });
@@ -163,7 +167,7 @@ export function useTimelinePlayer(videoElA: RefObject<HTMLVideoElement | null>, 
       if (clips.length > 1) loadIntoSlot(1, 1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clips.map((c) => `${c.id}:${c.src}:${c.trimIn}:${c.trimOut}:${c.volume}:${c.muted}:${c.speed}:${c.fadeInSec}:${c.fadeOutSec}`).join("|")]);
+  }, [clips.map((c) => `${c.id}:${c.src}:${c.trimIn}:${c.trimOut}:${c.volume}:${c.muted}:${c.speed}:${c.fadeInSec}:${c.fadeOutSec}:${c.videoFadeInSec}:${c.videoFadeOutSec}`).join("|")]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const applyGlobalTime = useCallback(

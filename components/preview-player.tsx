@@ -4,7 +4,7 @@ import { useRef, type CSSProperties, type RefObject } from "react";
 import { Play, Pause, SkipBack, SkipForward, StepBack, StepForward, Maximize2 } from "lucide-react";
 import { useMonkeStore } from "@/lib/store";
 import { clipLayerStyle, cutoutMaskStyle } from "@/lib/layer-style";
-import { motionAt } from "@/lib/timeline-math";
+import { motionAt, videoFadeAt } from "@/lib/timeline-math";
 import { OverlayLayer } from "./overlay-layer";
 import { CaptionLayer } from "./caption-layer";
 import type { useTimelinePlayer } from "@/lib/timeline-player";
@@ -49,7 +49,9 @@ export function PreviewPlayer({ player, videoElA, videoElB }: PreviewPlayerProps
   // Motion is a function of position within the clip, so it's recomputed on
   // every tick — currentTime is state, so this re-renders with the clock.
   const motion = activeClip ? motionAt(activeClip, player.currentTime - activeClip.startOffset) : {};
-  const hasMotion = !!motion.position || motion.opacity != null;
+  const elapsedInClip = activeClip ? player.currentTime - activeClip.startOffset : 0;
+  const videoFade = activeClip ? videoFadeAt(activeClip, elapsedInClip) : 1;
+  const hasMotion = !!motion.position || motion.opacity != null || videoFade < 1;
   const hasCustomLayer = !!activeClip && (!!activeClip.position || !!activeClip.mask || activeClip.opacity != null || hasMotion);
   const activeCutout = activeClip?.cutout ? cutoutFrames[activeClip.id] : undefined;
   const activeLayerStyle: CSSProperties | undefined =
@@ -59,7 +61,7 @@ export function PreviewPlayer({ player, videoElA, videoElB }: PreviewPlayerProps
             ? clipLayerStyle({
                 ...activeClip!,
                 position: motion.position ?? activeClip!.position,
-                opacity: motion.opacity ?? activeClip!.opacity,
+                opacity: (motion.opacity ?? activeClip!.opacity ?? 1) * videoFade,
               })
             : {}),
           ...(activeCutout ? cutoutMaskStyle(activeCutout, player.currentTime - activeClip!.startOffset) : {}),

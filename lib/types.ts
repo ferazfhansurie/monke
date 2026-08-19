@@ -83,6 +83,11 @@ export interface TimelineClip {
   // are what make a cut sound intentional.
   fadeInSec?: number;
   fadeOutSec?: number;
+  // Fade to/from black. A dip-to-black transition is this on the outgoing
+  // clip plus the same on the incoming one — no timeline overlap needed,
+  // which is why it works without changing the layout model.
+  videoFadeInSec?: number;
+  videoFadeOutSec?: number;
   // Animated position/opacity. When present these override the static
   // `position`/`opacity` above for the frames they cover — the static
   // values remain the fallback so a clip without motion is unchanged.
